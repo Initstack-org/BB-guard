@@ -46,7 +46,18 @@ def connect(path: str, *, readonly: bool = False) -> sqlite3.Connection:
     """
     if readonly:
         # The path is percent-encoded: a raw "#" or "?" would otherwise end the path early.
-        conn = sqlite3.connect(f"file:{quote(str(path), safe='/')}?mode=ro", uri=True, isolation_level=None)
+        uri = f"file:{quote(str(path), safe='/')}"
+        conn = sqlite3.connect(uri + "?mode=ro", uri=True, isolation_level=None)
+        try:
+            conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+        except sqlite3.OperationalError:
+            # A mode=ro connection cannot open a WAL database when no other connection has it open
+            # (the -wal and -shm files are gone, and a read-only connection cannot create them).
+            # Seen on macOS SQLite when the service is stopped. Fall back to a normal connection that
+            # refuses all writes. mode=rw never creates a missing database file.
+            conn.close()
+            conn = sqlite3.connect(uri + "?mode=rw", uri=True, isolation_level=None)
+            conn.execute("PRAGMA query_only=ON")
     else:
         conn = sqlite3.connect(path, isolation_level=None)
     conn.row_factory = sqlite3.Row

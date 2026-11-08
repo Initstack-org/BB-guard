@@ -121,8 +121,8 @@ def test_bad_new_password_is_not_counted_as_a_failed_sign_in(conn, hasher, admin
 
 
 def test_change_password_honours_minimum_length(conn, hasher, admin_id):
-    with pytest.raises(AccountError, match="at least 20"):
-        change_password(conn, hasher, admin_id, GOOD_PW, NEW_PW, ip=IP, now_ms=NOW, min_length=20)
+    with pytest.raises(AccountError, match="at least 30"):
+        change_password(conn, hasher, admin_id, GOOD_PW, NEW_PW, ip=IP, now_ms=NOW, min_length=30)
 
 
 def test_new_password_works_for_sign_in_afterwards(conn, hasher, admin_id):

@@ -37,4 +37,11 @@ button.secondary { color:var(--fg); background:transparent; border:1px solid var
 .table th, .table td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
 .table td form { margin:0; }
 code { font-size:13px; }
+.panel.wide { max-width:none; }
+.filters { display:grid; grid-template-columns:repeat(auto-fill, minmax(170px, 1fr)); gap:0 12px; align-items:end; }
+.filters label { max-width:none; }
+.filters select { display:block; width:100%; margin-top:4px; padding:8px; font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:6px; }
+.filters .actions { display:flex; gap:12px; align-items:center; margin:12px 0; }
+.badge { display:inline-block; padding:1px 8px; border:1px solid var(--line); border-radius:10px; font-size:12px; }
+.badge-failure, .badge-denied { color:var(--err); border-color:var(--err); }
 @media (max-width: 700px) { body.app { flex-direction:column; } .sidebar { width:auto; border-right:0; border-bottom:1px solid var(--line); } }

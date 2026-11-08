@@ -1,0 +1,63 @@
+{% extends "app_base.html" %}
+{% block title %}Administrators - InitStack Guard{% endblock %}
+{% block content %}
+    <h1>Administrators</h1>
+    <p class="muted">Accounts are disabled, never deleted. Creating, disabling, enabling and resetting passwords need your password confirmed within the last {{ window_label }}
+      ({% if reauth_recent %}confirmed right now{% else %}not confirmed right now: <a href="/account">confirm it here</a>, then come back{% endif %}). Times are shown in {{ timezone_name }}.</p>
+    {% if message %}<p class="notice" role="status">{{ message }}</p>{% endif %}
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+    <section class="panel wide">
+      <div class="scroll">
+        <table class="table">
+          <thead><tr><th>Username</th><th>Name</th><th>Status</th><th>Last sign-in</th><th>Passkeys</th><th>Created by</th><th></th></tr></thead>
+          <tbody>
+          {% for a in admins %}
+            <tr>
+              <td>{{ a.username }}{% if a.id == admin.id %} <span class="muted">(you)</span>{% endif %}</td>
+              <td>{{ a.display_name or "-" }}</td>
+              <td>{% if a.disabled %}<span class="badge badge-denied">disabled</span>{% else %}<span class="badge">enabled</span>{% endif %}</td>
+              <td>{{ a.last_login or "never" }}</td>
+              <td>{{ a.passkey_count }}</td>
+              <td>{{ a.created_by or "-" }}</td>
+              <td>
+                {% if a.id != admin.id %}
+                <form method="post" action="/api/v1/admins/{{ 'enable' if a.disabled else 'disable' }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="admin_id" value="{{ a.id }}">
+                  <button type="submit" class="secondary">{{ "Enable" if a.disabled else "Disable" }}</button>
+                </form>
+                <details>
+                  <summary>Set password</summary>
+                  <form method="post" action="/api/v1/admins/password">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="admin_id" value="{{ a.id }}">
+                    <label>New password <input name="new_password" type="password" autocomplete="new-password" required minlength="{{ min_length }}"></label>
+                    <label>Again <input name="confirm_password" type="password" autocomplete="new-password" required minlength="{{ min_length }}"></label>
+                    <button type="submit" class="secondary">Set and sign them out</button>
+                  </form>
+                </details>
+                {% else %}
+                <span class="muted">Change your own password on the <a href="/account">Authentication</a> page.</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Add an administrator</h2>
+      <p class="muted">There is no public registration. Give the new administrator this password yourself, outside Guard, and ask them to change it after signing in. At least {{ min_length }} characters.</p>
+      <form method="post" action="/api/v1/admins">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Username <input name="username" value="{{ form_values.username }}" required minlength="3" maxlength="64" autocomplete="off"></label>
+        <label>Display name (optional) <input name="display_name" value="{{ form_values.display_name }}" maxlength="100" autocomplete="off"></label>
+        <label>Initial password <input name="password" type="password" autocomplete="new-password" required minlength="{{ min_length }}"></label>
+        <label>Initial password again <input name="confirm_password" type="password" autocomplete="new-password" required minlength="{{ min_length }}"></label>
+        <button type="submit">Create administrator</button>
+      </form>
+    </section>
+{% endblock %}

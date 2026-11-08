@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -32,6 +32,8 @@ from starlette.staticfiles import StaticFiles
 from .. import audit, db
 from ..auth import csrf, service, sessions
 from ..config import Config
+from . import audit_log
+from . import admins as admins_mod
 from . import limits as limits_mod
 
 SESSION_COOKIE = "__Host-guard_session"
@@ -60,9 +62,9 @@ NAV = [
                   ("Block Page", "/block-page", False)]),
     ("MyBB", [("HTML Injections", "/injections", False),
               ("Injection History / Versions", "/injections/history", False)]),
-    ("Administration", [("Administrators", "/admins", False),
+    ("Administration", [("Administrators", "/admins", True),
                         ("Authentication / Passkeys", "/account", True),
-                        ("Audit Log", "/audit", False), ("API Settings", "/settings/api", False),
+                        ("Audit Log", "/audit", True), ("API Settings", "/settings/api", False),
                         ("General Settings", "/settings", False),
                         ("Backups and Retention", "/backups", False)]),
 ]
@@ -448,6 +450,144 @@ def sessions_revoke_others(ctx: Ctx) -> Response:
 
 
 # ---------------------------------------------------------------------------------------------
+# Audit Log page (docs/API.md section 10.2). Read-only, server-rendered, GET filters, keyset paging.
+# Deviation for the owner to confirm: the JSON endpoints (/api/v1/audit, /api/v1/audit/{id}) and the
+# CSV export are not built; the page does its own querying, as the account page does.
+
+
+def audit_page(ctx: Ctx) -> Response:
+    tz = ctx.admin["timezone"]
+    error, status = "", 200
+    try:
+        f = audit_log.parse_filters(dict(ctx.request.query_params.items()), tz)
+    except audit_log.FilterError as exc:
+        f, error, status = audit_log.Filters(), str(exc), 400
+    rows, next_cursor = audit_log.query(ctx.conn, f)
+    events = [{"time": _format_ms(r["ts_ms"], tz), "actor": r["actor_name"], "ip": r["ip"],
+               "action": r["action"], "outcome": r["outcome"], "target_type": r["target_type"],
+               "target_id": r["target_id"], "detail": audit_log.detail_preview(r["detail"])}
+              for r in rows]
+    older_url = ""
+    if next_cursor:
+        keep = {"actor": f.actor, "action": f.action, "outcome": f.outcome,
+                "target_type": f.target_type, "target_id": f.target_id, "from": f.from_date,
+                "to": f.to_date}
+        query = {k: v for k, v in keep.items() if v}
+        if f.size != audit_log.DEFAULT_SIZE:
+            query["size"] = str(f.size)
+        query["before"] = next_cursor
+        older_url = "/audit?" + urlencode(query)
+    values = {"actor": f.actor, "action": f.action, "outcome": f.outcome,
+              "target_type": f.target_type, "target_id": f.target_id, "from_date": f.from_date,
+              "to_date": f.to_date}
+    return _render("audit.html", status, admin=ctx.admin, nav=NAV, current="/audit",
+                   csrf_token=ctx.csrf_token(), events=events, values=values, error=error,
+                   outcomes=audit_log.OUTCOMES, older_url=older_url, timezone_name=tz)
+
+
+# ---------------------------------------------------------------------------------------------
+# Administrators page (docs/API.md section 10.1). Create, disable, enable and set-password are class R
+# (recent re-authentication). Deviations for the owner to confirm: HTML form posts with redirects, the
+# target admin id is a form field (`admin_id`) rather than a path segment, and there is no
+# display-name edit for other admins yet.
+
+ADMIN_FLASH = {
+    "created": "Administrator created.",
+    "disabled": "Account disabled and its sessions signed out.",
+    "enabled": "Account enabled.",
+    "password_set": "Password set. That administrator's sessions were signed out.",
+}
+
+
+def _admins_page(ctx: Ctx, *, status: int = 200, error: str = "", message: str = "",
+                 form_values: dict | None = None) -> Response:
+    tz = ctx.admin["timezone"]
+    rows = [{"id": r["id"], "username": r["username"], "display_name": r["display_name"],
+             "disabled": bool(r["is_disabled"]), "passkey_count": r["passkey_count"],
+             "last_login": _format_ms(r["last_login_ms"], tz) if r["last_login_ms"] else "",
+             "created_by": r["created_by_name"] or ""} for r in admins_mod.list_admins(ctx.conn)]
+    return _render("admins.html", status, admin=ctx.admin, nav=NAV, current="/admins",
+                   csrf_token=ctx.csrf_token(), admins=rows, error=error, message=message,
+                   form_values=form_values or {"username": "", "display_name": ""},
+                   reauth_recent=ctx.state.reauth.is_recent(ctx.session, ctx.now_ms, ctx.limits.reauth_s),
+                   window_label=_window_label(ctx.limits.reauth_s), timezone_name=tz,
+                   min_length=ctx.limits.min_password_length)
+
+
+def _sentence(text: str) -> str:
+    return text[:1].upper() + text[1:] + "."
+
+
+def _form_admin_id(ctx: Ctx) -> int | None:
+    try:
+        return int(ctx.form.get("admin_id", "")[:20])
+    except ValueError:
+        return None
+
+
+def admins_get(ctx: Ctx) -> Response:
+    return _admins_page(ctx, message=ADMIN_FLASH.get(ctx.request.query_params.get("msg", ""), ""))
+
+
+def admins_create(ctx: Ctx) -> Response:
+    values = {"username": ctx.form.get("username", "").strip()[:64],
+              "display_name": ctx.form.get("display_name", "").strip()[:100]}
+    password = _password_field(ctx, "password")
+    if password != _password_field(ctx, "confirm_password"):
+        return _admins_page(ctx, status=400, error="The passwords do not match.", form_values=values)
+    try:
+        service.create_admin(ctx.conn, ctx.state.hasher, values["username"], password,
+                             now_ms=ctx.now_ms, display_name=values["display_name"],
+                             created_by=ctx.admin["id"], actor_name=ctx.admin["username"],
+                             min_length=ctx.limits.min_password_length)
+    except service.AccountError as exc:
+        return _admins_page(ctx, status=400, error=_sentence(str(exc)), form_values=values)
+    return RedirectResponse("/admins?msg=created", status_code=303)
+
+
+def _admin_toggle(ctx: Ctx, action, flash: str) -> Response:
+    target = _form_admin_id(ctx)
+    if target is None:
+        return _admins_page(ctx, status=400, error="Choose an administrator.")
+    try:
+        action(ctx.conn, target, actor_id=ctx.admin["id"], actor_name=ctx.admin["username"],
+               ip=ctx.ip, now_ms=ctx.now_ms)
+    except admins_mod.AdminActionError as exc:
+        return _admins_page(ctx, status=exc.status, error=str(exc))
+    return RedirectResponse(f"/admins?msg={flash}", status_code=303)
+
+
+def admins_disable(ctx: Ctx) -> Response:
+    return _admin_toggle(ctx, admins_mod.disable, "disabled")
+
+
+def admins_enable(ctx: Ctx) -> Response:
+    return _admin_toggle(ctx, admins_mod.enable, "enabled")
+
+
+def admins_password(ctx: Ctx) -> Response:
+    target = _form_admin_id(ctx)
+    if target is None:
+        return _admins_page(ctx, status=400, error="Choose an administrator.")
+    if target == ctx.admin["id"]:
+        return _admins_page(ctx, status=400,
+                            error="Change your own password on the Authentication page.")
+    new_password = _password_field(ctx, "new_password")
+    if new_password != _password_field(ctx, "confirm_password"):
+        return _admins_page(ctx, status=400, error="The passwords do not match.")
+    try:
+        service.set_password(ctx.conn, ctx.state.hasher, target, new_password, now_ms=ctx.now_ms,
+                             actor_admin_id=ctx.admin["id"], actor_name=ctx.admin["username"],
+                             action="admin.password_reset", min_length=ctx.limits.min_password_length,
+                             ip=ctx.ip)
+    except service.AccountError as exc:
+        text = str(exc)
+        return _admins_page(ctx, status=404 if text == "no such administrator" else 400,
+                            error=_sentence(text))
+    return RedirectResponse("/admins?msg=password_set", status_code=303)
+
+
+# ---------------------------------------------------------------------------------------------
 # Application
 
 
@@ -497,6 +637,12 @@ def create_app(cfg: Config, *, hasher=None, clock: Callable[[], int] = db.now_ms
     table.add("/logout", logout, "W", methods=("POST",))
     table.add("/", dashboard, "A")
     table.add("/account", account_get, "A")
+    table.add("/audit", audit_page, "A")
+    table.add("/admins", admins_get, "A")
+    table.add("/api/v1/admins", admins_create, "R", methods=("POST",))
+    table.add("/api/v1/admins/disable", admins_disable, "R", methods=("POST",))
+    table.add("/api/v1/admins/enable", admins_enable, "R", methods=("POST",))
+    table.add("/api/v1/admins/password", admins_password, "R", methods=("POST",))
     table.add("/api/v1/account/password", account_password, "W", methods=("POST",))
     table.add("/api/v1/reauth/password", reauth_password, "W", methods=("POST",))
     table.add("/api/v1/account/sessions/revoke", session_revoke, "W", methods=("POST",))

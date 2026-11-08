@@ -1,0 +1,52 @@
+{% extends "app_base.html" %}
+{% block title %}Audit Log - InitStack Guard{% endblock %}
+{% block content %}
+    <h1>Audit Log</h1>
+    <p class="muted">Sign-ins, failures and administrative changes, newest first. Times are shown in {{ timezone_name }}. Events cannot be edited or deleted here.</p>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+    <section class="panel wide">
+      <form method="get" action="/audit" class="filters">
+        <label>Admin <input name="actor" value="{{ values.actor }}" maxlength="64"></label>
+        <label>Action <input name="action" value="{{ values.action }}" maxlength="64" placeholder="auth. for a whole group"></label>
+        <label>Outcome
+          <select name="outcome">
+            <option value="">Any</option>
+            {% for o in outcomes %}<option value="{{ o }}"{% if values.outcome == o %} selected{% endif %}>{{ o }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Target type <input name="target_type" value="{{ values.target_type }}" maxlength="32"></label>
+        <label>Target id <input name="target_id" value="{{ values.target_id }}" maxlength="128"></label>
+        <label>From <input name="from" type="date" value="{{ values.from_date }}"></label>
+        <label>To <input name="to" type="date" value="{{ values.to_date }}"></label>
+        <div class="actions">
+          <button type="submit">Filter</button>
+          <a href="/audit">Reset</a>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel wide">
+      <div class="scroll">
+        <table class="table">
+          <thead><tr><th>Time</th><th>Admin</th><th>Address</th><th>Action</th><th>Outcome</th><th>Target</th><th>Detail</th></tr></thead>
+          <tbody>
+          {% for e in events %}
+            <tr>
+              <td>{{ e.time }}</td>
+              <td>{{ e.actor or "-" }}</td>
+              <td>{{ e.ip or "-" }}</td>
+              <td><code>{{ e.action }}</code></td>
+              <td><span class="badge badge-{{ e.outcome }}">{{ e.outcome }}</span></td>
+              <td>{% if e.target_type %}{{ e.target_type }}{% if e.target_id %} {{ e.target_id }}{% endif %}{% else %}-{% endif %}</td>
+              <td>{% if e.detail %}<code>{{ e.detail }}</code>{% else %}-{% endif %}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="7" class="muted">No events match.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if older_url %}<p><a href="{{ older_url }}">Older events</a></p>{% endif %}
+    </section>
+{% endblock %}
