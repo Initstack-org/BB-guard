@@ -1,0 +1,86 @@
+{% extends "app_base.html" %}
+{% block title %}{{ ip }} - Visitors - InitStack Guard{% endblock %}
+{% block content %}
+    <p class="muted"><a href="/visitors">Visitors</a> / {{ ip }}</p>
+    <h1>{{ ip }}</h1>
+    {% if not visitor %}
+    <p class="error" role="alert">No visitor with that address has been recorded.</p>
+    {% else %}
+    <p class="muted">Times are shown in {{ timezone_name }}. Byte counts are HTTP traffic through this site only. Moderation status and IP intelligence appear here once those features are built.</p>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+    <section class="panel wide">
+      <ul class="stats">
+        <li><span class="num">{{ visitor.requests }}</span><span class="label">requests</span></li>
+        <li><span class="num">{{ visitor.bytes_in|bytes }}</span><span class="label">received</span></li>
+        <li><span class="num">{{ visitor.bytes_out|bytes }}</span><span class="label">sent</span></li>
+        <li><span class="num">{{ visitor.denied }}</span><span class="label">denied</span></li>
+        <li><span class="num">{{ visitor.url_total }}</span><span class="label">distinct URLs</span></li>
+      </ul>
+      <p>First seen {{ visitor.first }}. Last seen {{ visitor.last }}.</p>
+      {% if accounts %}
+      <p>Forum accounts seen with this address:</p>
+      <ul class="inline-list">
+        {% for a in accounts %}<li>{{ a.username }} (uid {{ a.uid }}), {{ a.hits }} requests, last {{ a.last }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+
+    <section class="panel wide">
+      <h2>Methods and status codes</h2>
+      <p class="muted">Counted over the most recent requests in the selected dates (at most {{ breakdown_cap }}).</p>
+      <p>Methods: {% for m in methods %}<code>{{ m.value }}</code> {{ m.n }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</p>
+      <p>Status codes: {% for s in statuses %}<code>{{ s.value }}</code> {{ s.n }}{% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</p>
+    </section>
+
+    <section class="panel wide">
+      <h2>URLs requested</h2>
+      <p class="muted">{% if visitor.url_total > urls|length %}Showing the {{ urls|length }} most requested of {{ visitor.url_total }}.{% else %}All {{ visitor.url_total }}.{% endif %}</p>
+      <div class="scroll">
+        <table class="table">
+          <thead><tr><th>URL</th><th>Hits</th><th>First</th><th>Last</th></tr></thead>
+          <tbody>
+          {% for u in urls %}
+            <tr>
+              <td class="path"><a href="/url-history/detail?id={{ u.url_id }}">{{ u.host }}{{ u.path }}</a></td>
+              <td class="num-cell">{{ u.hits }}</td><td>{{ u.first }}</td><td>{{ u.last }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel wide">
+      <h2>User-Agent history</h2>
+      <div class="scroll">
+        <table class="table">
+          <thead><tr><th>User-Agent</th><th>Requests</th><th>First</th><th>Last</th></tr></thead>
+          <tbody>
+          {% for a in agents %}
+            <tr><td class="path">{{ a.value }}</td><td class="num-cell">{{ a.hits }}</td><td>{{ a.first }}</td><td>{{ a.last }}</td></tr>
+          {% else %}
+            <tr><td colspan="4" class="muted">None recorded.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Requests</h2>
+      <form method="get" action="/visitors/ip" class="filters">
+        <input type="hidden" name="ip" value="{{ ip }}">
+        <label>From <input name="from" type="date" value="{{ values.from_date }}"></label>
+        <label>To <input name="to" type="date" value="{{ values.to_date }}"></label>
+        <label>Status <input name="status" value="{{ values.status }}" maxlength="3" placeholder="404 or 4xx"></label>
+        <div class="actions">
+          <button type="submit">Filter</button>
+          <a href="/visitors/ip?ip={{ ip|urlencode }}">Reset</a>
+        </div>
+      </form>
+      {% include "_requests_table.html" %}
+      {% if older_url %}<p><a href="{{ older_url }}">Older requests</a></p>{% endif %}
+    </section>
+    {% endif %}
+{% endblock %}

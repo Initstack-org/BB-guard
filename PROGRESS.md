@@ -2,7 +2,7 @@
 
 Status of each stage and acceptance item for InitStack Guard. `GOAL.md` defines what "done" means; this file says where things stand. Nothing is marked done without code and tests (GOAL rule 11).
 
-**Last updated:** 2026-11-08
+**Last updated:** 2026-11-08 (Dashboard overview added; Visitors and URL History found written but not recorded)
 
 ## Stage status
 
@@ -11,11 +11,11 @@ Status of each stage and acceptance item for InitStack Guard. `GOAL.md` defines 
 | 1 | Architecture, schema, API plan | **Written, awaiting owner review** | `docs/ARCHITECTURE.md`, `docs/SUBSYSTEMS.md`, `docs/SCHEMA.md`, `docs/API.md` |
 | 2 | Backend foundation (config, migrations, admin CLI, auth, sessions, CSRF, audit) | **Code written; password sign-in end to end; first green run on the Mac for the part written before the Administrators page.** Exit criterion not yet met (see below) | Library: `guard/config.py`, `db.py`, `audit.py`, `cli.py`, `auth/*`, `migrations/0001`-`0006`. Web: `guard/web/*`, templates, `static/style.css`, `cli.py serve` |
 | 3 | Passkeys | Not started | |
-| 4 | Traffic monitoring | **Partial: ingest library plus a CLI command.** Parser, normalizer and redaction, restart-safe tailer, transactional writer with rollups, one-pass runner, and `python -m guard ingest [--follow]` with the `GUARD_ACCESS_LOG` setting and a health heartbeat. Not run inside the service; no Nginx log config; no Visitors or URL History pages, graphs, CSV export. | `guard/ingest/*`, `guard/cli.py` `cmd_ingest`, `tests/test_ingest_*.py` (142 tests), `tests/test_cli_ingest.py` (new, not run) |
+| 4 | Traffic monitoring | **Mostly written, none of the page code run.** Ingest library plus CLI (parser, redaction, restart-safe tailer, transactional writer with rollups, `python -m guard ingest [--follow]`). Pages: Visitors (filters, paging, CSV), visitor detail, request detail, URL History (search, ranking), URL detail (range presets and custom dates, address and status filters, three SVG graphs, CSV), and the Dashboard overview (24-hour totals, two graphs, top URLs, newest addresses, ingest state). Still missing: ingest is not started by any service (no systemd unit), no Nginx `log_format` file, no site-wide graph page, no ingest run on a real Nginx log. | `guard/ingest/*`, `guard/web/traffic.py`, `guard/web/charts.py`, `guard/web/app.py`, templates `visitors`, `visitor_detail`, `request_detail`, `url_history`, `url_detail`, `_requests_table`, `dashboard`; tests `test_ingest_*.py` (142, run on the Mac), `test_cli_ingest.py`, `test_traffic.py`, `test_web_traffic.py` (**not run anywhere**) |
 | 5 | IP intelligence and moderation | Not started (schema only: migration 0004) | |
 | 6 | URL rules, block page, enforcement | Not started (schema only: migration 0005) | |
 | 7 | MyBB plugin and injection manager | Not started (schema only: migration 0006) | |
-| 8 | Full UI and deployment | **Partial: 5 of the 15 sidebar pages are live** (Dashboard shell, Administrators, Authentication, Audit Log, General Settings). No deployment files: `deploy/nginx` and `deploy/systemd` are empty. | `guard/web/app.py` `NAV` |
+| 8 | Full UI and deployment | **Partial: 7 of the 15 sidebar pages are live** (Dashboard with data, Visitors, URL History, Administrators, Authentication, Audit Log, General Settings). No deployment files: `deploy/nginx` and `deploy/systemd` are empty. | `guard/web/app.py` `NAV` |
 | 9 | Verification | Not started | |
 
 Stage 1 exit criterion is "reviewed by owner". That has not happened, so Stage 1 is not complete.
@@ -26,13 +26,15 @@ Stage 2 code was started before that review (by an earlier session, not logged a
 
 | Sidebar item | Route | State |
 |---|---|---|
-| Dashboard | `/` | Shell only, no data yet |
+| Dashboard | `/` | Built: last 24 hourly buckets (requests, active addresses, bytes in and out, denied), two graphs, top 5 URLs, 5 newest addresses, ingest state. Tests written, not run. No notifications, no search |
+| Visitors | `/visitors` | Built: address or prefix filter, seen-between dates, sort, keyset paging, CSV export (audited). Detail pages `/visitors/ip?ip=...` and `/visitors/request?id=...`. Tests written, not run. No moderation status or IP intelligence yet (Stage 5) |
+| URL History | `/url-history` | Built: path search (a pasted URL works), all-time ranking or a 24h/7d/30d top list, detail page `/url-history/detail?id=...` with totals, unique addresses, three SVG graphs (requests, bytes in, bytes out; per hour or per day), address and status filters, CSV export (audited). Tests written, not run |
 | Administrators | `/admins` | Built: list, create, disable, enable, set another admin's password. Tests written, not run |
 | Authentication / Passkeys | `/account` | Password change, re-authentication, own sessions. **No passkeys** (Stage 3) and no profile edit (display name, time zone, theme) |
 | Audit Log | `/audit` | Built: filters, keyset paging. Tests passed on the Mac |
 | General Settings | `/settings` | Built: full registry, typed validation. Tests written, not run. Only `auth.*` settings are read by running code; `ingest` reads three more (`site.hosts`, `retention.rollup_min_hits`, `retention.ingest_errors_max`) but is not running anywhere |
 
-Greyed out, no route: Visitors, IP Intelligence, URL History, IP Rules, URL Access Rules, Block Page, HTML Injections, Injection History / Versions, API Settings, Backups and Retention.
+Greyed out, no route: IP Intelligence, IP Rules, URL Access Rules, Block Page, HTML Injections, Injection History / Versions, API Settings, Backups and Retention.
 
 ## Acceptance criteria (GOAL.md section 1)
 
@@ -40,9 +42,9 @@ Greyed out, no route: Visitors, IP Intelligence, URL History, IP Rules, URL Acce
 
 | Item | Area | Design coverage | Code and tests |
 |---|---|---|---|
-| A | Dashboard UI | Route and page list in API.md | **Partial.** Sidebar has the exact GOAL sections; 5 of 15 pages live; dark/light follows the browser setting only. Sidebar is not collapsible; no top-bar search, notifications or breadcrumbs |
-| B | Visitor monitoring | SUBSYSTEMS 2, SCHEMA 5.3, API 7.1 | **Partial.** Ingest library records every field GOAL B lists and redacts secrets (unit tests). No visitor pages, search or detail view; ingest not running |
-| C | URL history | SCHEMA 5.3 and 9, API 7.3 | **Partial.** Per-URL counts and hourly rollups are written by ingest. No page, graphs or CSV export |
+| A | Dashboard UI | Route and page list in API.md | **Partial.** Sidebar has the exact GOAL sections; 7 of 15 pages live; dark/light follows the browser setting only. Sidebar is not collapsible; no top-bar search, notifications or breadcrumbs |
+| B | Visitor monitoring | SUBSYSTEMS 2, SCHEMA 5.3, API 7.1 | **Partial.** Ingest library records every field GOAL B lists and redacts secrets (unit tests, run). Visitor search, per-address detail (URLs with hit counts, methods, status codes, User-Agent history, forum accounts, date and status filters) and a single-request view are written, not run. Moderation status and IP intel are not there (Stage 5); ingest is not running in a service |
+| C | URL history | SCHEMA 5.3 and 9, API 7.3 | **Partial.** Page, ranking, per-URL detail, graphs and CSV export are written, not run. Graphs are 24h, 7d, 30d and custom dates, labelled with unit and time zone. Busy URLs are graphed from the hourly rollup, others from the request rows |
 | D | IP intelligence and moderation | SUBSYSTEMS 3, SCHEMA 5.4, API 7.2 and 8.1 | Not started (schema only) |
 | E | Enforcement scope | ARCHITECTURE 6, SUBSYSTEMS 3.4 | Not started |
 | F | URL access rules | SUBSYSTEMS 4, SCHEMA 5.5, API 8.2 | Not started (schema only) |
@@ -57,6 +59,7 @@ Greyed out, no route: Visitors, IP Intelligence, URL History, IP Rules, URL Acce
 - **Owner's Mac, Python 3.9.6, 2026-11-08 (later run): 539 passed, 0 failed** (full suite, real pytest). This includes the Administrators, General Settings, ingest and `ingest` CLI test files that had not been run before. Still never exercised: the real `Argon2Hasher`, `guard serve`, any browser sign-in, and ingest on a real log.
 - **Owner's Mac, 2026-11-08, by hand (SQLite 3.54.0, Python 3.9.6):** `doctor` (clean error before the database existed, then schema 6 of 6, argon2-cffi ok), `migrate` (all six applied, WAL), `create-admin` with the **real `Argon2Hasher`**, and `ingest` on a one-line hand-made log (first pass wrote 1, second pass found nothing new). The stored row had `token=abc` redacted to `token=[redacted]`. `guard serve` started and stopped cleanly. Over curl: `/login` with the right Host returned 200 with the CSP and a `__Host-` Secure HttpOnly cookie and no Server header; a wrong or missing Host returned 421, including for `/healthz` (the 200 case for `/healthz` was not checked). Still never exercised: any browser sign-in, ingest on a real Nginx log, SQLite 3.37.
 - **Earlier Mac run, Python 3.9.6, Starlette 0.49.3, pytest 8.4.2:** first run 288 collected, 286 passed, 2 failed; both failures were fixed (a real `connect(readonly=True)` bug on WAL databases, and a wrong test) and a second run passed. That covers the library layer, the web layer (50), the account page (40) and the Audit Log page (31). The code therefore runs on Python 3.9 as well as the 3.12 and 3.13 used earlier.
+- **Written after the 539-test run, not run anywhere (2026-11-08, found unlogged and extended in a later session):** `guard/web/traffic.py`, `guard/web/charts.py`, the Visitors, URL History and Dashboard handlers and templates, `static/traffic.css`, and the tests `tests/test_traffic.py` (about 60 cases) and `tests/test_web_traffic.py` (about 45 cases). That session had no way to run them. What was done instead was a read-through: every table and column in the SQL in `traffic.py` was checked against `migrations/0003_traffic.sql`, and each assertion in the new web tests was traced against the handlers and templates. Two weak assertions in `test_web_traffic.py` were fixed that way. This is not a substitute for a pytest run.
 - **Written after the 539-test run, not run anywhere:** `tests/test_web_lan.py` (about 60 cases: client IP rules per peer and header, the LAN connection gate, sign-in and per-address throttle through a simulated connector, LAN-bind config rules) and the code it covers (`guard/config.py`, `guard/web/app.py`, `guard/cli.py`). Never tried with a real `cloudflared`.
 - **Not run on the Mac (superseded by the 539-test run above):** `tests/test_web_admins.py` (about 45 cases), `tests/test_web_settings.py` (about 60), the four `tests/test_ingest_*.py` files (142 cases, including the new ones for hostile bytes), and `tests/test_cli_ingest.py` (about 25 cases: the `ingest` command and `GUARD_ACCESS_LOG`). The last file has not been run anywhere, not even in the sandbox.
 - **Ingest tests, 2026-11-08T12:01Z, Claude's sandbox only** (Python 3.12.3, SQLite 3.45.1): 142 passed, using the real files copied from the Mac but a small **stand-in test runner, not pytest** (the sandbox has no pytest and no network). The stand-in was checked by breaking the code on purpose: 13 tests failed, and with the new parser fix reverted, 3 failed. It supports only fixtures, `parametrize`, `raises` and `tmp_path`. Run real `pytest` on the Mac to confirm.

@@ -1,0 +1,50 @@
+{% extends "app_base.html" %}
+{% block title %}Visitors - InitStack Guard{% endblock %}
+{% block content %}
+    <h1>Visitors</h1>
+    <p class="muted">Every address that has made a request through Nginx. Times are shown in {{ timezone_name }}. Byte counts are HTTP traffic through this site only. "Seen between" matches visitors whose first-to-last-seen span overlaps the dates.</p>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+    <section class="panel wide">
+      <form method="get" action="/visitors" class="filters">
+        <label>Address <input name="ip" value="{{ values.ip }}" maxlength="45" placeholder="203.0.113.7 or 203.0.113."></label>
+        <label>Seen from <input name="from" type="date" value="{{ values.from_date }}"></label>
+        <label>Seen to <input name="to" type="date" value="{{ values.to_date }}"></label>
+        <label>Sort
+          <select name="sort">
+            <option value="last_seen"{% if values.sort == "last_seen" %} selected{% endif %}>Last seen</option>
+            <option value="requests"{% if values.sort == "requests" %} selected{% endif %}>Most requests</option>
+          </select>
+        </label>
+        <div class="actions">
+          <button type="submit">Filter</button>
+          <a href="/visitors">Reset</a>
+          <a href="{{ export_url }}">Download CSV</a>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel wide">
+      <div class="scroll">
+        <table class="table">
+          <thead><tr><th>Address</th><th>First seen</th><th>Last seen</th><th>Requests</th><th>Received</th><th>Sent</th><th>Denied</th></tr></thead>
+          <tbody>
+          {% for v in visitors %}
+            <tr>
+              <td><a href="/visitors/ip?ip={{ v.ip|urlencode }}">{{ v.ip }}</a></td>
+              <td>{{ v.first }}</td>
+              <td>{{ v.last }}</td>
+              <td class="num-cell">{{ v.requests }}</td>
+              <td class="num-cell">{{ v.bytes_in|bytes }}</td>
+              <td class="num-cell">{{ v.bytes_out|bytes }}</td>
+              <td class="num-cell">{{ v.denied }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="7" class="muted">No visitors match.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if older_url %}<p><a href="{{ older_url }}">Next page</a></p>{% endif %}
+    </section>
+{% endblock %}

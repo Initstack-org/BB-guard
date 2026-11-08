@@ -86,3 +86,20 @@ def record_health(conn: sqlite3.Connection, *, ok: bool, error: str | None = Non
                                                  last_error_ms = excluded.last_error_ms,
                                                  last_error = excluded.last_error""",
                      (ts, ts, (error or "unknown error")[:300]))
+
+
+def drain_with_health(conn: sqlite3.Connection, log_path: str, trusted_connectors, *,
+                      now: float | None = None) -> tuple[PassResult | None, str | None]:
+    """`drain` plus the health heartbeat. Returns (result, None) or (None, error text); never raises for
+    SQLite or file errors, because the caller is a long-running loop that must keep retrying."""
+    try:
+        result = drain(conn, log_path, trusted_connectors, now=now)
+        record_health(conn, ok=True)
+        return result, None
+    except (sqlite3.Error, OSError) as exc:
+        text = f"{type(exc).__name__}: {exc}"
+        try:
+            record_health(conn, ok=False, error=text)
+        except sqlite3.Error:
+            pass  # the database itself is the problem; the error text is still returned
+        return None, text

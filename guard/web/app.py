@@ -34,8 +34,10 @@ from ..auth import csrf, service, sessions
 from ..config import Config
 from . import audit_log
 from . import admins as admins_mod
+from . import charts as charts_mod
 from . import limits as limits_mod
 from . import settings_registry
+from . import traffic
 
 SESSION_COOKIE = "__Host-guard_session"
 PRE_COOKIE = "__Host-guard_pre"
@@ -57,8 +59,8 @@ PUBLIC_ALLOW_LIST = frozenset({"/login", "/login/password", "/healthz", "/static
 # Sidebar from GOAL.md section 1.A. Pages marked built=False are listed but not links yet.
 NAV = [
     ("Overview", [("Dashboard", "/", True)]),
-    ("Traffic", [("Visitors", "/visitors", False), ("IP Intelligence", "/ip-intel", False),
-                 ("URL History", "/url-history", False)]),
+    ("Traffic", [("Visitors", "/visitors", True), ("IP Intelligence", "/ip-intel", False),
+                 ("URL History", "/url-history", True)]),
     ("Security", [("IP Rules", "/ip-rules", False), ("URL Access Rules", "/url-rules", False),
                   ("Block Page", "/block-page", False)]),
     ("MyBB", [("HTML Injections", "/injections", False),
@@ -73,6 +75,7 @@ NAV = [
 _templates = Environment(
     loader=FileSystemLoader(str(Path(__file__).parent / "templates")),
     autoescape=select_autoescape(["html"]), trim_blocks=True, lstrip_blocks=True)
+_templates.filters["bytes"] = traffic.human_bytes
 
 
 # ---------------------------------------------------------------------------------------------
@@ -344,7 +347,34 @@ def logout(ctx: Ctx) -> Response:
 
 
 def dashboard(ctx: Ctx) -> Response:
-    return _render("dashboard.html", admin=ctx.admin, nav=NAV, current="/", csrf_token=ctx.csrf_token())
+    """Overview: last-24-hours totals and graphs, top URLs, newest visitors and the log reader's state.
+
+    Every number comes from a rollup, an indexed aggregate or a top-5 query, so the page stays cheap on a
+    large database. The Dashboard is read-only and writes nothing (not even an audit row).
+    """
+    tz = ctx.admin["timezone"]
+    overview = traffic.site_overview(ctx.conn, ctx.now_ms, tz)
+    note = f"per hour, {tz}"
+    svgs = [
+        charts_mod.bar_chart("Requests", [(b.label, b.full_label, b.requests) for b in overview["buckets"]],
+                             value_text=lambda n: f"{n:,}", note=note),
+        charts_mod.bar_chart("Sent by the site (bytes out)",
+                             [(b.label, b.full_label, b.bytes_out) for b in overview["buckets"]],
+                             value_text=traffic.human_bytes, note=note)]
+    top_rows, _ = traffic.url_ranking(ctx.conn, traffic.UrlListFilters(period="24h", size=5), ctx.now_ms)
+    recent_rows, _ = traffic.visitor_page(ctx.conn, traffic.VisitorFilters(size=5))
+    state = traffic.ingest_status(ctx.conn)
+    ingest = {"last_request": _format_ms(state["last_request_ms"], tz) if state["last_request_ms"] else "",
+              "updated": _format_ms(state["updated_ms"], tz) if state["updated_ms"] else "",
+              "lines_total": state["lines_total"], "bad_lines_total": state["bad_lines_total"],
+              "peer_mismatch_total": state["peer_mismatch_total"]}
+    return _render(
+        "dashboard.html", admin=ctx.admin, nav=NAV, current="/", csrf_token=ctx.csrf_token(),
+        timezone_name=tz, overview=overview, chart_svgs=svgs, ingest=ingest,
+        window_label=f"{_format_ms(overview['from_ms'], tz)} to {_format_ms(overview['to_ms'] - 1, tz)}",
+        top_urls=[{"id": r["id"], "host": r["host"], "path": r["path"], "hits": r["hits"]} for r in top_rows],
+        recent=[{"ip": r["ip"], "last": _format_ms(r["last_seen_ms"], tz), "requests": r["request_count"]}
+                for r in recent_rows])
 
 
 def healthz(ctx: Ctx) -> Response:
@@ -674,6 +704,238 @@ def settings_reset(ctx: Ctx) -> Response:
 
 
 # ---------------------------------------------------------------------------------------------
+# Visitors, request detail and URL History (docs/API.md 7.1 and 7.3). Read-only pages (class A) with GET
+# filters and keyset paging; queries live in guard/web/traffic.py and graphs in guard/web/charts.py.
+# Deviations for the owner to confirm: server-rendered pages instead of the JSON endpoints, and the
+# identifiers travel in query strings (`/visitors/ip?ip=...`, `/url-history/detail?id=...`). CSV exports
+# are written to the audit log (`export.visitors`, `export.url_history`).
+
+URL_PERIODS = [("all", "All time"), ("24h", "Last 24 hours"), ("7d", "Last 7 days"),
+               ("30d", "Last 30 days")]
+URL_RANGES = [("24h", "24 hours"), ("7d", "7 days"), ("30d", "30 days")]
+
+
+def _qp(ctx: Ctx) -> dict:
+    return dict(ctx.request.query_params.items())
+
+
+def _page_url(path: str, keep: dict, size: int | None = None, before: str = "") -> str:
+    query = {k: v for k, v in keep.items() if v}
+    if size is not None and size != traffic.DEFAULT_SIZE:
+        query["size"] = str(size)
+    if before:
+        query["before"] = before
+    return path + ("?" + urlencode(query) if query else "")
+
+
+def _next_url(path: str, keep: dict, cursor: str | None, size: int) -> str:
+    return _page_url(path, keep, size, cursor) if cursor else ""
+
+
+def _request_rows(rows, tz: str) -> list:
+    return [{"id": r["id"], "time": _format_ms(r["ts_ms"], tz), "ip": r["ip"], "method": r["method"],
+             "host": r["host"], "path": r["path"], "query": r["query"] or "", "status": r["status"],
+             "status_class": f"{r['status'] // 100}xx", "bytes_in": r["bytes_in"],
+             "bytes_out": r["bytes_out"], "duration_ms": r["duration_ms"], "outcome": r["outcome"],
+             "reason": r["reason"] or ""} for r in rows]
+
+
+def _csv_response(text: str, filename: str, truncated: bool) -> Response:
+    return Response(text, media_type="text/csv", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-Guard-Truncated": "1" if truncated else "0"})
+
+
+def _visitor_keep(f: traffic.VisitorFilters) -> dict:
+    return {"ip": f.ip_text, "from": f.from_date, "to": f.to_date,
+            "sort": f.sort if f.sort != "last_seen" else ""}
+
+
+def visitors_page(ctx: Ctx) -> Response:
+    tz = ctx.admin["timezone"]
+    error, status = "", 200
+    try:
+        f = traffic.parse_visitor_filters(_qp(ctx), tz)
+    except traffic.FilterError as exc:
+        f, error, status = traffic.VisitorFilters(), str(exc), 400
+    rows, cursor = traffic.visitor_page(ctx.conn, f)
+    visitors = [{"ip": r["ip"], "first": _format_ms(r["first_seen_ms"], tz),
+                 "last": _format_ms(r["last_seen_ms"], tz), "requests": r["request_count"],
+                 "bytes_in": r["bytes_in"], "bytes_out": r["bytes_out"], "denied": r["denied_count"]}
+                for r in rows]
+    keep = _visitor_keep(f)
+    values = {"ip": f.ip_text, "from_date": f.from_date, "to_date": f.to_date, "sort": f.sort}
+    return _render("visitors.html", status, admin=ctx.admin, nav=NAV, current="/visitors",
+                   csrf_token=ctx.csrf_token(), visitors=visitors, values=values, error=error,
+                   older_url=_next_url("/visitors", keep, cursor, f.size),
+                   export_url=_page_url("/visitors/export.csv", keep), timezone_name=tz)
+
+
+def visitors_export(ctx: Ctx) -> Response:
+    try:
+        f = traffic.parse_visitor_filters(_qp(ctx), ctx.admin["timezone"])
+    except traffic.FilterError as exc:
+        return PlainTextResponse(str(exc), status_code=400)
+    rows = traffic.visitor_rows_for_csv(ctx.conn, f)
+    truncated = len(rows) > traffic.CSV_MAX_ROWS
+    rows = rows[:traffic.CSV_MAX_ROWS]
+    ctx.audit("export.visitors", "success", detail={"rows": len(rows), "truncated": truncated})
+    return _csv_response(traffic.visitors_to_csv(rows), "visitors.csv", truncated)
+
+
+def visitor_detail(ctx: Ctx) -> Response:
+    tz = ctx.admin["timezone"]
+    raw_ip = (ctx.request.query_params.get("ip") or "").strip()[:64]
+    row = traffic.visitor_by_ip(ctx.conn, raw_ip)
+    if row is None:
+        return _render("visitor_detail.html", 404, admin=ctx.admin, nav=NAV, current="/visitors",
+                       csrf_token=ctx.csrf_token(), ip=raw_ip, visitor=None, timezone_name=tz)
+    error, status = "", 200
+    try:
+        rf, values = traffic.parse_request_filters(_qp(ctx), tz, visitor_id=row["id"])
+    except traffic.FilterError as exc:
+        rf = traffic.RequestFilters(visitor_id=row["id"])
+        values = {"from_date": "", "to_date": "", "status": ""}
+        error, status = str(exc), 400
+    reqs, cursor = traffic.request_page(ctx.conn, rf)
+    urls, url_total = traffic.visitor_urls(ctx.conn, row["id"])
+    visitor = {"requests": row["request_count"], "bytes_in": row["bytes_in"],
+               "bytes_out": row["bytes_out"], "denied": row["denied_count"], "url_total": url_total,
+               "first": _format_ms(row["first_seen_ms"], tz), "last": _format_ms(row["last_seen_ms"], tz)}
+    keep = {"ip": row["ip"], "from": values["from_date"], "to": values["to_date"],
+            "status": values["status"]}
+    return _render(
+        "visitor_detail.html", status, admin=ctx.admin, nav=NAV, current="/visitors",
+        csrf_token=ctx.csrf_token(), ip=row["ip"], visitor=visitor, error=error, values=values,
+        timezone_name=tz, breakdown_cap=traffic.PER_VISITOR_BREAKDOWN_ROWS,
+        methods=traffic.visitor_breakdown(ctx.conn, row["id"], "method", rf.from_ms, rf.to_ms),
+        statuses=traffic.visitor_breakdown(ctx.conn, row["id"], "status", rf.from_ms, rf.to_ms),
+        urls=[{"url_id": u["url_id"], "host": u["host"], "path": u["path"], "hits": u["hits"],
+               "first": _format_ms(u["first_seen_ms"], tz), "last": _format_ms(u["last_seen_ms"], tz)}
+              for u in urls],
+        agents=[{"value": a["value"], "hits": a["hits"], "first": _format_ms(a["first_seen_ms"], tz),
+                 "last": _format_ms(a["last_seen_ms"], tz)}
+                for a in traffic.visitor_agents(ctx.conn, row["id"])],
+        accounts=[{"uid": a["uid"], "username": a["username"], "hits": a["hits"],
+                   "last": _format_ms(a["last_seen_ms"], tz)}
+                  for a in traffic.visitor_accounts(ctx.conn, row["id"])],
+        requests=_request_rows(reqs, tz), show_ip=False, show_url=True,
+        older_url=_next_url("/visitors/ip", keep, cursor, rf.size))
+
+
+def request_detail_page(ctx: Ctx) -> Response:
+    tz = ctx.admin["timezone"]
+    raw = (ctx.request.query_params.get("id") or "").strip()
+    row = traffic.request_detail(ctx.conn, int(raw)) if raw.isdigit() and len(raw) <= 16 else None
+    if row is None:
+        return _render("request_detail.html", 404, admin=ctx.admin, nav=NAV, current="/visitors",
+                       csrf_token=ctx.csrf_token(), req=None, timezone_name=tz)
+    req = dict(row)
+    req["time"] = _format_ms(row["ts_ms"], tz)
+    req["time_utc"] = traffic.iso_utc(row["ts_ms"])
+    return _render("request_detail.html", admin=ctx.admin, nav=NAV, current="/visitors",
+                   csrf_token=ctx.csrf_token(), req=req, timezone_name=tz)
+
+
+def url_history_page(ctx: Ctx) -> Response:
+    tz = ctx.admin["timezone"]
+    error, status = "", 200
+    try:
+        f = traffic.parse_url_list_filters(_qp(ctx))
+    except traffic.FilterError as exc:
+        f, error, status = traffic.UrlListFilters(), str(exc), 400
+    rows, cursor = traffic.url_ranking(ctx.conn, f, ctx.now_ms)
+    urls = [{"id": r["id"], "host": r["host"], "path": r["path"], "truncated": bool(r["path_truncated"]),
+             "hits": r["hits"], "first": _format_ms(r["first_seen_ms"], tz),
+             "last": _format_ms(r["last_seen_ms"], tz)} for r in rows]
+    keep = {"q": f.q, "period": f.period if f.period != "all" else ""}
+    return _render("url_history.html", status, admin=ctx.admin, nav=NAV, current="/url-history",
+                   csrf_token=ctx.csrf_token(), urls=urls, error=error, periods=URL_PERIODS,
+                   values={"q": f.q, "period": f.period}, size=f.size, timezone_name=tz,
+                   older_url=_next_url("/url-history", keep, cursor, f.size))
+
+
+def _url_detail_filters(ctx: Ctx, params: dict):
+    """(filters, error text). A bad filter falls back to the defaults for the same URL id."""
+    tz = ctx.admin["timezone"]
+    try:
+        return traffic.parse_url_detail_filters(params, tz, ctx.now_ms), ""
+    except traffic.FilterError as exc:
+        message = str(exc)
+    return traffic.parse_url_detail_filters({"id": params.get("id", "")}, tz, ctx.now_ms), message
+
+
+def _url_detail_keep(f: traffic.UrlDetailFilters) -> dict:
+    return {"id": str(f.url_id), "range": f.range.key if f.range.key != "custom" else "",
+            "from": f.range.from_date, "to": f.range.to_date, "ip": f.ip_text, "status": f.status_text}
+
+
+def url_detail_page(ctx: Ctx) -> Response:
+    tz = ctx.admin["timezone"]
+    try:
+        f, error = _url_detail_filters(ctx, _qp(ctx))
+    except traffic.FilterError as exc:
+        return _render("url_detail.html", 400, admin=ctx.admin, nav=NAV, current="/url-history",
+                       csrf_token=ctx.csrf_token(), url=None, error=str(exc), timezone_name=tz)
+    status = 400 if error else 200
+    row = traffic.url_by_id(ctx.conn, f.url_id)
+    if row is None:
+        return _render("url_detail.html", 404, admin=ctx.admin, nav=NAV, current="/url-history",
+                       csrf_token=ctx.csrf_token(), url=None, error="", timezone_name=tz)
+    ids = traffic.resolve_visitor_ids(ctx.conn, f.ip_exact, f.ip_prefix)
+    summary = traffic.url_summary(ctx.conn, f.url_id, f.range.from_ms, f.range.to_ms, ids, f.status_lo,
+                                  f.status_hi)
+    reqs, cursor = traffic.url_requests_page(ctx.conn, f, ids)
+    unit, buckets = traffic.url_series(ctx.conn, row["id"], row["hit_count"], f.range.from_ms,
+                                       f.range.to_ms, tz)
+    note = f"per {unit}, {tz}"
+    svgs = [
+        charts_mod.bar_chart("Requests", [(b.label, b.full_label, b.requests) for b in buckets],
+                             value_text=lambda n: f"{n:,}", note=note),
+        charts_mod.bar_chart("Received by the site (bytes in)",
+                             [(b.label, b.full_label, b.bytes_in) for b in buckets],
+                             value_text=traffic.human_bytes, note=note),
+        charts_mod.bar_chart("Sent by the site (bytes out)",
+                             [(b.label, b.full_label, b.bytes_out) for b in buckets],
+                             value_text=traffic.human_bytes, note=note)]
+    keep = _url_detail_keep(f)
+    base_keep = {"id": str(f.url_id), "ip": f.ip_text, "status": f.status_text}
+    return _render(
+        "url_detail.html", status, admin=ctx.admin, nav=NAV, current="/url-history",
+        csrf_token=ctx.csrf_token(), error=error, timezone_name=tz,
+        url={"id": row["id"], "host": row["host"], "path": row["path"],
+             "truncated": bool(row["path_truncated"]), "hit_count": row["hit_count"],
+             "first": _format_ms(row["first_seen_ms"], tz), "last": _format_ms(row["last_seen_ms"], tz)},
+        values={"range": f.range.key, "from_date": f.range.from_date, "to_date": f.range.to_date,
+                "ip": f.ip_text, "status": f.status_text},
+        ranges=URL_RANGES,
+        range_urls={key: _page_url("/url-history/detail", dict(base_keep, range=key)) for key, _ in URL_RANGES},
+        range_label=f"{_format_ms(f.range.from_ms, tz)} to {_format_ms(f.range.to_ms - 1, tz)}",
+        summary=summary, chart_svgs=svgs, requests=_request_rows(reqs, tz), show_ip=True, show_url=False,
+        export_url=_page_url("/url-history/export.csv", keep),
+        older_url=_next_url("/url-history/detail", keep, cursor, f.size))
+
+
+def url_history_export(ctx: Ctx) -> Response:
+    try:
+        f, error = _url_detail_filters(ctx, _qp(ctx))
+    except traffic.FilterError as exc:
+        return PlainTextResponse(str(exc), status_code=400)
+    if error:
+        return PlainTextResponse(error, status_code=400)
+    row = traffic.url_by_id(ctx.conn, f.url_id)
+    if row is None:
+        return PlainTextResponse("Not found", status_code=404)
+    ids = traffic.resolve_visitor_ids(ctx.conn, f.ip_exact, f.ip_prefix)
+    rows = traffic.url_requests_for_csv(ctx.conn, f, ids)
+    truncated = len(rows) > traffic.CSV_MAX_ROWS
+    rows = rows[:traffic.CSV_MAX_ROWS]
+    ctx.audit("export.url_history", "success", target_type="url", target_id=str(row["id"]),
+              detail={"rows": len(rows), "truncated": truncated})
+    return _csv_response(traffic.requests_to_csv(rows), f"url-history-{row['id']}.csv", truncated)
+
+
+# ---------------------------------------------------------------------------------------------
 # Application
 
 
@@ -753,6 +1015,13 @@ def create_app(cfg: Config, *, hasher=None, clock: Callable[[], int] = db.now_ms
     table.add("/settings", settings_get, "A")
     table.add("/api/v1/settings/set", settings_set, "R", methods=("POST",))
     table.add("/api/v1/settings/reset", settings_reset, "R", methods=("POST",))
+    table.add("/visitors", visitors_page, "A")
+    table.add("/visitors/ip", visitor_detail, "A")
+    table.add("/visitors/request", request_detail_page, "A")
+    table.add("/visitors/export.csv", visitors_export, "A")
+    table.add("/url-history", url_history_page, "A")
+    table.add("/url-history/detail", url_detail_page, "A")
+    table.add("/url-history/export.csv", url_history_export, "A")
     table.add("/api/v1/account/password", account_password, "W", methods=("POST",))
     table.add("/api/v1/reauth/password", reauth_password, "W", methods=("POST",))
     table.add("/api/v1/account/sessions/revoke", session_revoke, "W", methods=("POST",))

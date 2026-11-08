@@ -1,0 +1,58 @@
+{% extends "app_base.html" %}
+{% block title %}URL History detail - InitStack Guard{% endblock %}
+{% block content %}
+    <p class="muted"><a href="/url-history">URL History</a> / detail</p>
+    {% if not url %}
+    <h1>URL History</h1>
+    <p class="error" role="alert">{{ error or "No URL with that number was found." }}</p>
+    {% else %}
+    <h1 class="path">{{ url.host }}{{ url.path }}</h1>
+    <p class="muted">Times are shown in {{ timezone_name }}. Byte counts are HTTP traffic through this site only: "received" is what visitors sent to the site, "sent" is what the site sent back.{% if url.truncated %} The path was shortened when recorded.{% endif %}</p>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+    <section class="panel wide">
+      <p class="range-links">Range:
+        {% for key, label in ranges %}<a href="{{ range_urls[key] }}"{% if values.range == key %} aria-current="true"{% endif %}>{{ label }}</a>{% endfor %}
+        {% if values.range == "custom" %}<span>Custom: {{ values.from_date or "..." }} to {{ values.to_date or "now" }}</span>{% endif %}
+      </p>
+      <form method="get" action="/url-history/detail" class="filters">
+        <input type="hidden" name="id" value="{{ url.id }}">
+        <label>From <input name="from" type="date" value="{{ values.from_date }}"></label>
+        <label>To <input name="to" type="date" value="{{ values.to_date }}"></label>
+        <label>Address <input name="ip" value="{{ values.ip }}" maxlength="45" placeholder="203.0.113.7 or 203.0.113."></label>
+        <label>Status <input name="status" value="{{ values.status }}" maxlength="3" placeholder="404 or 4xx"></label>
+        <div class="actions">
+          <button type="submit">Apply</button>
+          <a href="/url-history/detail?id={{ url.id }}">Reset</a>
+          <a href="{{ export_url }}">Download CSV</a>
+        </div>
+      </form>
+      <p class="muted">The range is {{ range_label }}. The graphs show every request to this URL in the range; the totals and the table also apply the address and status filters.</p>
+    </section>
+
+    <section class="panel wide">
+      <ul class="stats">
+        <li><span class="num">{{ summary.visits }}</span><span class="label">visits in range</span></li>
+        <li><span class="num">{{ summary.unique_ips }}</span><span class="label">unique addresses</span></li>
+        <li><span class="num">{{ summary.bytes_in|bytes }}</span><span class="label">received</span></li>
+        <li><span class="num">{{ summary.bytes_out|bytes }}</span><span class="label">sent</span></li>
+        <li><span class="num">{{ summary.denied }}</span><span class="label">denied</span></li>
+        <li><span class="num">{{ url.hit_count }}</span><span class="label">visits all time</span></li>
+      </ul>
+      <p>First seen {{ url.first }}. Last seen {{ url.last }}.</p>
+    </section>
+
+    <section class="panel wide">
+      <h2>Over time</h2>
+      <div class="charts">
+        {% for svg in chart_svgs %}<div class="chart-box">{{ svg|safe }}</div>{% endfor %}
+      </div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Requests</h2>
+      {% include "_requests_table.html" %}
+      {% if older_url %}<p><a href="{{ older_url }}">Older requests</a></p>{% endif %}
+    </section>
+    {% endif %}
+{% endblock %}

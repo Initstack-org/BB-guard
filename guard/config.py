@@ -79,6 +79,8 @@ class Config:
     export_dir: str = ""
     backup_dir: str = ""
     access_log: str = ""  # Nginx JSON spool file read by ingest (docs/ARCHITECTURE.md section 9)
+    tls_cert: str = ""    # optional: serve the dashboard over HTTPS itself (local testing)
+    tls_key: str = ""
     secret_key: bytes = field(default=b"", repr=False)
 
     @property
@@ -150,6 +152,14 @@ def load_config(env_path: str | None = None, secrets_path: str | None = None,
     if access_log and (not os.path.isabs(access_log) or "\0" in access_log):
         raise ConfigError("GUARD_ACCESS_LOG must be an absolute file path")
 
+    tls_cert = values.get("GUARD_TLS_CERT", "")
+    tls_key = values.get("GUARD_TLS_KEY", "")
+    for key, path in (("GUARD_TLS_CERT", tls_cert), ("GUARD_TLS_KEY", tls_key)):
+        if path and (not os.path.isabs(path) or "\0" in path):
+            raise ConfigError(f"{key} must be an absolute file path")
+    if bool(tls_cert) != bool(tls_key):
+        raise ConfigError("GUARD_TLS_CERT and GUARD_TLS_KEY must be set together")
+
     return Config(
         db_path=need("GUARD_DB_PATH"),
         external_origin=origin,
@@ -159,5 +169,7 @@ def load_config(env_path: str | None = None, secrets_path: str | None = None,
         export_dir=values.get("GUARD_EXPORT_DIR", ""),
         backup_dir=values.get("GUARD_BACKUP_DIR", ""),
         access_log=access_log,
+        tls_cert=tls_cert,
+        tls_key=tls_key,
         secret_key=_decode_key(need("GUARD_SECRET_KEY")),
     )

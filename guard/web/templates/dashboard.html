@@ -2,5 +2,62 @@
 {% block title %}Dashboard - InitStack Guard{% endblock %}
 {% block content %}
     <h1>Dashboard</h1>
-    <p>You are signed in. Traffic monitoring and the other pages are built in later stages, so most of the sidebar is greyed out for now.</p>
+    <p class="muted">Traffic through Nginx for the last 24 hourly periods ({{ window_label }}). Times are shown in {{ timezone_name }}. Byte counts are HTTP traffic through this site only: "received" is what visitors sent to the site and "sent" is what the site sent back.</p>
+
+    <section class="panel wide">
+      <ul class="stats">
+        <li><span class="num">{{ overview.requests }}</span><span class="label">requests</span></li>
+        <li><span class="num">{{ overview.visitors }}</span><span class="label">active addresses</span></li>
+        <li><span class="num">{{ overview.bytes_in|bytes }}</span><span class="label">received</span></li>
+        <li><span class="num">{{ overview.bytes_out|bytes }}</span><span class="label">sent</span></li>
+        <li><span class="num">{{ overview.denied }}</span><span class="label">denied</span></li>
+      </ul>
+      <div class="charts">
+        {% for svg in chart_svgs %}<div class="chart-box">{{ svg|safe }}</div>{% endfor %}
+      </div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Most requested URLs (last 24 hours)</h2>
+      <div class="scroll">
+        <table class="table">
+          <thead><tr><th>URL</th><th>Visits</th></tr></thead>
+          <tbody>
+          {% for u in top_urls %}
+            <tr><td class="path"><a href="/url-history/detail?id={{ u.id }}">{{ u.host }}{{ u.path }}</a></td><td class="num-cell">{{ u.hits }}</td></tr>
+          {% else %}
+            <tr><td colspan="2" class="muted">No requests in this period.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p><a href="/url-history">All URLs</a></p>
+    </section>
+
+    <section class="panel wide">
+      <h2>Most recently seen addresses</h2>
+      <div class="scroll">
+        <table class="table">
+          <thead><tr><th>Address</th><th>Last seen</th><th>Requests (all time)</th></tr></thead>
+          <tbody>
+          {% for v in recent %}
+            <tr><td><a href="/visitors/ip?ip={{ v.ip|urlencode }}">{{ v.ip }}</a></td><td>{{ v.last }}</td><td class="num-cell">{{ v.requests }}</td></tr>
+          {% else %}
+            <tr><td colspan="3" class="muted">No visitors recorded yet.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p><a href="/visitors">All visitors</a></p>
+    </section>
+
+    <section class="panel wide">
+      <h2>Log ingest</h2>
+      {% if ingest.last_request %}
+      <p>Last request recorded {{ ingest.last_request }}. Log position last saved {{ ingest.updated or "never" }}.</p>
+      <p class="muted">Lines read: {{ ingest.lines_total }}. Lines that could not be parsed: {{ ingest.bad_lines_total }}. Requests that did not come through the trusted connector address: {{ ingest.peer_mismatch_total }}.</p>
+      {% else %}
+      <p>No requests recorded yet. Requests appear here after the log reader has run against the Nginx access log (<code>python -m guard ingest</code>).</p>
+      {% endif %}
+    </section>
 {% endblock %}

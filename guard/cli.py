@@ -196,36 +196,73 @@ def cmd_serve(args, out, **_) -> int:
         return 1
     app = create_app(cfg)  # raises MissingDependency when argon2-cffi is not installed
     host, port = cfg.dashboard_bind
-    out(f"dashboard listening on {host}:{port} (origin {cfg.external_origin})")
+    tls = {}
+    if cfg.tls_cert:
+        for path in (cfg.tls_cert, cfg.tls_key):
+            if not os.path.isfile(path):
+                out(f"error: TLS file {path} does not exist")
+                return 1
+        tls = {"ssl_certfile": cfg.tls_cert, "ssl_keyfile": cfg.tls_key}
+    out(f"dashboard listening on {host}:{port} (origin {cfg.external_origin})"
+        + (" with TLS" if tls else ""))
     if cfg.dashboard_on_lan:
         out(f"note: LAN listener. Only loopback and these trusted connectors may connect: "
             f"{', '.join(cfg.trusted_connectors)}. Their CF-Connecting-IP header is used as the client address.")
     # No proxy header handling and no access log: client IP rules live in guard.web.app.client_ip,
     # and request lines are not logged (docs/ARCHITECTURE.md section 8, GOAL.md rule 12).
-    uvicorn.run(app, host=host, port=port, proxy_headers=False, server_header=False, access_log=False)
+    ingest_thread = None
+    if not cfg.access_log:
+        out("note: GUARD_ACCESS_LOG is not set, so no requests are being recorded")
+    elif getattr(args, "no_ingest", False):
+        out("note: ingest is off (--no-ingest); run the ingest command separately to record requests")
+    else:
+        from .ingest.service import IngestThread  # noqa: PLC0415
+        ingest_thread = IngestThread(cfg.db_path, cfg.access_log, cfg.trusted_connectors, report=out)
+        ingest_thread.start()
+        out(f"ingest: reading {cfg.access_log} in the background every {ingest_thread.interval_s:g}s")
+    try:
+        uvicorn.run(app, host=host, port=port, proxy_headers=False, server_header=False, access_log=False,
+                    **tls)
+    finally:
+        if ingest_thread is not None:
+            ingest_thread.stop()
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="guard-admin")
-    parser.add_argument("--env", default=os.environ.get("GUARD_ENV_FILE"))
-    parser.add_argument("--secrets", default=os.environ.get("GUARD_SECRETS_FILE"))
-    sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("doctor").set_defaults(func=cmd_doctor)
-    sub.add_parser("migrate").set_defaults(func=cmd_migrate)
-    p = sub.add_parser("create-admin")
+    parser = argparse.ArgumentParser(
+        prog="guard", formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="InitStack Guard: operator commands. Run migrate first on a new database, then "
+                    "create-admin, then serve.",
+        epilog="Settings come from --env and --secrets files (KEY=VALUE) and GUARD_* environment variables.\n"
+               "Passwords are typed at a terminal prompt only.\n"
+               "Docs: README.md (install and commands), PROGRESS.md (status), CHANGES.md (log), docs/.\n"
+               "Run `guard <command> --help` for a command's own options.")
+    parser.add_argument("--env", default=os.environ.get("GUARD_ENV_FILE"),
+                        help="non-secret settings file (default: $GUARD_ENV_FILE)")
+    parser.add_argument("--secrets", default=os.environ.get("GUARD_SECRETS_FILE"),
+                        help="secrets file (default: $GUARD_SECRETS_FILE)")
+    sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
+    sub.add_parser("doctor", help="check SQLite, argon2-cffi, configuration and schema version"
+                   ).set_defaults(func=cmd_doctor)
+    sub.add_parser("migrate", help="apply pending database migrations and enable WAL mode"
+                   ).set_defaults(func=cmd_migrate)
+    p = sub.add_parser("create-admin", help="create an administrator (how the first one is made)")
     p.add_argument("username")
-    p.add_argument("--display-name")
+    p.add_argument("--display-name", help="name shown in the dashboard")
     p.set_defaults(func=cmd_create_admin)
-    p = sub.add_parser("reset-password")
+    p = sub.add_parser("reset-password", help="set a new password and sign that administrator out")
     p.add_argument("username")
     p.set_defaults(func=cmd_reset_password)
-    sub.add_parser("list-admins").set_defaults(func=cmd_list_admins)
+    sub.add_parser("list-admins", help="list administrators").set_defaults(func=cmd_list_admins)
     p = sub.add_parser("ingest", help="read the Nginx JSON access log into the database")
     p.add_argument("--follow", action="store_true", help="keep running instead of one pass")
     p.add_argument("--interval", type=int, default=5, help="seconds between passes with --follow (default 5)")
     p.set_defaults(func=cmd_ingest)
-    sub.add_parser("serve").set_defaults(func=cmd_serve)
+    p = sub.add_parser("serve", help="run the dashboard (and ingest, when GUARD_ACCESS_LOG is set)")
+    p.add_argument("--no-ingest", action="store_true",
+                   help="do not read the access log in the background")
+    p.set_defaults(func=cmd_serve)
     return parser
 
 

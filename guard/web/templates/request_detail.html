@@ -1,0 +1,31 @@
+{% extends "app_base.html" %}
+{% block title %}Request - InitStack Guard{% endblock %}
+{% block content %}
+    <p class="muted"><a href="/visitors">Visitors</a>{% if req %} / <a href="/visitors/ip?ip={{ req.ip|urlencode }}">{{ req.ip }}</a>{% endif %} / request</p>
+    <h1>Request{% if req %} {{ req.id }}{% endif %}</h1>
+    {% if not req %}
+    <p class="error" role="alert">No request with that number was found.</p>
+    {% else %}
+    <section class="panel wide">
+      <table class="table">
+        <tbody>
+          <tr><th>Time</th><td>{{ req.time }} <span class="muted">({{ req.time_utc }})</span></td></tr>
+          <tr><th>Address</th><td><a href="/visitors/ip?ip={{ req.ip|urlencode }}">{{ req.ip }}</a></td></tr>
+          <tr><th>Method</th><td>{{ req.method }}</td></tr>
+          <tr><th>Host</th><td>{{ req.host }}</td></tr>
+          <tr><th>Path</th><td class="path"><a href="/url-history/detail?id={{ req.url_id }}">{{ req.path }}</a>{% if req.path_truncated %} <span class="muted">(shortened when recorded)</span>{% endif %}</td></tr>
+          <tr><th>Query (sensitive values redacted)</th><td class="path">{{ req.query or "-" }}</td></tr>
+          <tr><th>Status</th><td>{{ req.status }}</td></tr>
+          <tr><th>Received</th><td>{{ req.bytes_in|bytes }} ({{ req.bytes_in }} bytes)</td></tr>
+          <tr><th>Sent</th><td>{{ req.bytes_out|bytes }} ({{ req.bytes_out }} bytes)</td></tr>
+          <tr><th>Duration</th><td>{{ req.duration_ms }} ms</td></tr>
+          <tr><th>User-Agent</th><td class="path">{{ req.user_agent or "-" }}</td></tr>
+          <tr><th>Referrer</th><td class="path">{{ req.referrer or "-" }}</td></tr>
+          <tr><th>Forum account</th><td>{% if req.mybb_uid %}{{ req.mybb_username }} (uid {{ req.mybb_uid }}){% else %}-{% endif %}</td></tr>
+          <tr><th>Result</th><td><span class="badge badge-{{ req.outcome }}">{{ req.outcome }}</span>{% if req.detection %} {{ req.detection }}{% endif %}{% if req.rule_ref %} (rule {{ req.rule_ref }}){% endif %}{% if req.reason %}: {{ req.reason }}{% endif %}</td></tr>
+          <tr><th>Managed host</th><td>{{ "yes" if req.managed else "no" }}</td></tr>
+        </tbody>
+      </table>
+    </section>
+    {% endif %}
+{% endblock %}

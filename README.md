@@ -105,6 +105,9 @@ GUARD_ACCESS_LOG=/var/log/nginx/guard/access.jsonl
 # Optional: let the tunnel connector reach the dashboard directly (see "Behind a Cloudflare tunnel")
 # GUARD_DASHBOARD_ALLOW_LAN=1
 # GUARD_DASHBOARD_BIND=192.168.1.50:8787
+# Optional: serve HTTPS from Guard itself (local testing; see "Trying it locally")
+# GUARD_TLS_CERT=/absolute/path/tls.crt
+# GUARD_TLS_KEY=/absolute/path/tls.key
 ```
 
 `secrets.env` (keep it out of git; restrict its permissions, e.g. `chmod 600`):
@@ -143,6 +146,29 @@ python -m guard --env guard.env --secrets secrets.env <command>
 
 Passwords are typed at a terminal prompt only. They are never taken from arguments, the
 environment, or a pipe. Run `migrate` before any other command that touches the database.
+
+## Trying it locally (no proxy)
+
+The dashboard needs HTTPS in the browser. For local testing, Guard can serve HTTPS itself with a
+throwaway self-signed certificate (your browser will warn once):
+
+```
+cat > .local/tls.cnf <<'EOF'
+[req]
+distinguished_name=dn
+x509_extensions=v3
+prompt=no
+[dn]
+CN=localhost
+[v3]
+subjectAltName=DNS:localhost,IP:127.0.0.1
+EOF
+openssl req -x509 -newkey rsa:2048 -nodes -keyout .local/tls.key -out .local/tls.crt -days 30 -config .local/tls.cnf
+```
+
+then in `guard.env`: `GUARD_EXTERNAL_ORIGIN=https://localhost:8787`, `GUARD_TLS_CERT` and
+`GUARD_TLS_KEY` as absolute paths to those two files. Run `serve` and open `https://localhost:8787`.
+Do not use a self-signed certificate in production; there, HTTPS is Cloudflare's.
 
 ## Behind a Cloudflare tunnel (no Nginx in front of the dashboard)
 

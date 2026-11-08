@@ -1,0 +1,24 @@
+{% if requests %}
+<div class="scroll">
+  <table class="table">
+    <thead><tr><th>Time</th>{% if show_ip %}<th>Address</th>{% endif %}<th>Method</th>{% if show_url %}<th>URL</th>{% endif %}<th>Status</th><th>Received</th><th>Sent</th><th>Duration</th><th>Result</th></tr></thead>
+    <tbody>
+    {% for r in requests %}
+      <tr>
+        <td><a href="/visitors/request?id={{ r.id }}">{{ r.time }}</a></td>
+        {% if show_ip %}<td><a href="/visitors/ip?ip={{ r.ip|urlencode }}">{{ r.ip }}</a></td>{% endif %}
+        <td>{{ r.method }}</td>
+        {% if show_url %}<td class="path">{{ r.host }}{{ r.path }}{% if r.query %}?{{ r.query }}{% endif %}</td>{% endif %}
+        <td class="status-{{ r.status_class }}">{{ r.status }}</td>
+        <td class="num-cell">{{ r.bytes_in|bytes }}</td>
+        <td class="num-cell">{{ r.bytes_out|bytes }}</td>
+        <td class="num-cell">{{ r.duration_ms }} ms</td>
+        <td><span class="badge badge-{{ r.outcome }}">{{ r.outcome }}</span>{% if r.reason %} <span class="muted">{{ r.reason }}</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="muted">No requests match.</p>
+{% endif %}

@@ -213,6 +213,27 @@ def test_loopback_default_is_not_a_lan_listener():
     assert not load_config(environ=env(GUARD_DASHBOARD_BIND="localhost:9000")).dashboard_on_lan
 
 
+def test_tls_files_default_to_off():
+    cfg = load_config(environ=env())
+    assert cfg.tls_cert == "" and cfg.tls_key == ""
+
+
+def test_tls_files_are_read():
+    cfg = load_config(environ=env(GUARD_TLS_CERT="/a/tls.crt", GUARD_TLS_KEY="/a/tls.key"))
+    assert (cfg.tls_cert, cfg.tls_key) == ("/a/tls.crt", "/a/tls.key")
+
+
+@pytest.mark.parametrize("over", [{"GUARD_TLS_CERT": "/a/tls.crt"}, {"GUARD_TLS_KEY": "/a/tls.key"}])
+def test_tls_cert_and_key_come_together(over):
+    with pytest.raises(ConfigError, match="together"):
+        load_config(environ=env(**over))
+
+
+def test_tls_paths_must_be_absolute():
+    with pytest.raises(ConfigError, match="GUARD_TLS_CERT"):
+        load_config(environ=env(GUARD_TLS_CERT="tls.crt", GUARD_TLS_KEY="/a/tls.key"))
+
+
 @pytest.mark.parametrize("bad", ["not-an-ip", "192.168.1.0/24", "192.168.1.148, junk"])
 def test_trusted_connectors_must_be_ip_addresses(bad):
     with pytest.raises(ConfigError, match="TRUSTED_CONNECTORS"):

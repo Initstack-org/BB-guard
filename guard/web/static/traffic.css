@@ -1,0 +1,22 @@
+/* Traffic pages (Visitors, URL History): charts, stat cards and status badges. */
+.chart { width: 100%; height: auto; max-width: 720px; display: block; }
+.chart-bar { fill: #3b82f6; }
+.chart-bar:hover { fill: #1d4ed8; }
+.chart-base { stroke: currentColor; stroke-opacity: .35; stroke-width: 1; }
+.chart-title { fill: currentColor; font-size: 12px; font-weight: 600; }
+.chart-axis { fill: currentColor; fill-opacity: .7; font-size: 10px; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
+.stats { display: flex; flex-wrap: wrap; gap: 1rem; margin: 0 0 1rem; padding: 0; list-style: none; }
+.stats li { min-width: 9rem; }
+.stats .num { display: block; font-size: 1.4rem; font-weight: 600; }
+.stats .label { font-size: .8rem; opacity: .7; }
+.badge-allowed { background: rgba(34, 139, 34, .2); }
+.badge-overridden { background: rgba(37, 99, 235, .2); }
+.badge-monitored { background: rgba(217, 119, 6, .2); }
+.badge-unchecked { background: rgba(120, 120, 120, .2); }
+.status-4xx, .status-5xx { font-weight: 600; }
+.path { word-break: break-all; }
+.num-cell { text-align: right; white-space: nowrap; }
+.inline-list { margin: 0; padding-left: 1.1rem; }
+.range-links a { margin-right: .75rem; }
+.range-links a[aria-current="true"] { font-weight: 600; text-decoration: none; }

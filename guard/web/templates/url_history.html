@@ -1,0 +1,44 @@
+{% extends "app_base.html" %}
+{% block title %}URL History - InitStack Guard{% endblock %}
+{% block content %}
+    <h1>URL History</h1>
+    <p class="muted">Every URL requested through Nginx, most accessed first. Search by path or paste a full URL; the search matches part of the path, ignoring the query string. Times are shown in {{ timezone_name }}.</p>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+    <section class="panel wide">
+      <form method="get" action="/url-history" class="filters">
+        <label>URL or path <input name="q" value="{{ values.q }}" maxlength="400" placeholder="/forum-3.html"></label>
+        <label>Period
+          <select name="period">
+            {% for key, label in periods %}<option value="{{ key }}"{% if values.period == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+        </label>
+        <div class="actions">
+          <button type="submit">Search</button>
+          <a href="/url-history">Reset</a>
+        </div>
+      </form>
+      {% if values.period != "all" %}<p class="muted">A period shows the top {{ size }} URLs in the last {{ values.period }} and is not paged.</p>{% endif %}
+    </section>
+
+    <section class="panel wide">
+      <div class="scroll">
+        <table class="table">
+          <thead><tr><th>URL</th><th>Visits</th><th>First seen</th><th>Last seen</th></tr></thead>
+          <tbody>
+          {% for u in urls %}
+            <tr>
+              <td class="path"><a href="/url-history/detail?id={{ u.id }}">{{ u.host }}{{ u.path }}</a>{% if u.truncated %} <span class="muted">(shortened)</span>{% endif %}</td>
+              <td class="num-cell">{{ u.hits }}</td>
+              <td>{{ u.first }}</td>
+              <td>{{ u.last }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="4" class="muted">No URLs match.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if older_url %}<p><a href="{{ older_url }}">Next page</a></p>{% endif %}
+    </section>
+{% endblock %}
