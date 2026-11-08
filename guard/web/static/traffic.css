@@ -1,22 +1,30 @@
-/* Traffic pages (Visitors, URL History): charts, stat cards and status badges. */
+/* Traffic pages (Visitors, URL History, Dashboard): charts, stat cards and status badges.
+   Colours come from the tokens in style.css so both themes work. */
 .chart { width: 100%; height: auto; max-width: 720px; display: block; }
-.chart-bar { fill: #3b82f6; }
-.chart-bar:hover { fill: #1d4ed8; }
+.chart-bar { fill: var(--chart); transition: fill-opacity 100ms ease-out; }
+.chart-bar:hover { fill-opacity: .72; }
 .chart-base { stroke: currentColor; stroke-opacity: .35; stroke-width: 1; }
-.chart-title { fill: currentColor; font-size: 12px; font-weight: 600; }
-.chart-axis { fill: currentColor; fill-opacity: .7; font-size: 10px; }
-.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
-.stats { display: flex; flex-wrap: wrap; gap: 1rem; margin: 0 0 1rem; padding: 0; list-style: none; }
-.stats li { min-width: 9rem; }
-.stats .num { display: block; font-size: 1.4rem; font-weight: 600; }
-.stats .label { font-size: .8rem; opacity: .7; }
-.badge-allowed { background: rgba(34, 139, 34, .2); }
-.badge-overridden { background: rgba(37, 99, 235, .2); }
-.badge-monitored { background: rgba(217, 119, 6, .2); }
-.badge-unchecked { background: rgba(120, 120, 120, .2); }
-.status-4xx, .status-5xx { font-weight: 600; }
+.chart-title { fill: currentColor; font-size: 12px; font-weight: 600; letter-spacing: -0.005em; }
+.chart-axis { fill: currentColor; fill-opacity: .72; font-size: 10px; letter-spacing: .01em; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.25rem; margin-top: .5rem; }
+.chart-box { padding: 12px 14px; border-radius: 12px; background: var(--bg); }
+
+.stats { display: flex; flex-wrap: wrap; gap: 1.25rem 2rem; margin: 0 0 1rem; padding: 0; list-style: none; }
+.stats li { min-width: 7.5rem; }
+.stats .num { display: block; font-size: 1.75rem; font-weight: 650; line-height: 1.1; letter-spacing: -0.022em; font-variant-numeric: tabular-nums; }
+.stats .label { display: block; margin-top: 2px; font-size: .75rem; font-weight: 500; letter-spacing: .02em; color: var(--muted); }
+
+.badge-allowed { color: var(--ok); background: var(--ok-soft); box-shadow: none; }
+.badge-overridden { color: var(--accent); background: var(--accent-soft); box-shadow: none; }
+.badge-monitored { color: var(--warn); background: var(--warn-soft); box-shadow: none; }
+.badge-unchecked { color: var(--muted); }
+.status-4xx { font-weight: 650; color: var(--warn); }
+.status-5xx { font-weight: 650; color: var(--err); }
 .path { word-break: break-all; }
-.num-cell { text-align: right; white-space: nowrap; }
+.num-cell { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .inline-list { margin: 0; padding-left: 1.1rem; }
-.range-links a { margin-right: .75rem; }
-.range-links a[aria-current="true"] { font-weight: 600; text-decoration: none; }
+.range-links a { display: inline-block; margin-right: .5rem; padding: 3px 10px; border-radius: 999px; text-decoration: none; transition: background-color 120ms ease-out, transform 100ms ease-out; }
+.range-links a:hover { background: var(--accent-soft); }
+.range-links a:active { transform: scale(.97); }
+.range-links a[aria-current="true"] { font-weight: 650; background: var(--accent-soft); }
+@media (prefers-reduced-motion: reduce) { .range-links a:active { transform: none; } }

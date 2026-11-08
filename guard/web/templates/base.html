@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en"{% if admin and admin.theme in ("light", "dark") %} data-theme="{{ admin.theme }}"{% endif %}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

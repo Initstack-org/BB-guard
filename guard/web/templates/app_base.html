@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block body_class %}app{% endblock %}
 {% block body %}
+<input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Show or hide the navigation menu">
 <aside class="sidebar" aria-label="Main navigation">
   <div class="brand">InitStack Guard</div>
   {% for section, items in nav %}
@@ -16,12 +17,15 @@
   </ul>
   {% endfor %}
 </aside>
+<label class="scrim" for="nav-toggle" aria-hidden="true"></label>
 <div class="main">
   <header class="topbar">
+    <label class="nav-button" for="nav-toggle">Menu</label>
+    <span class="spacer"></span>
     <span class="who">{{ admin.display_name or admin.username }}</span>
     <form method="post" action="/logout">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button type="submit">Sign out</button>
+      <button type="submit" class="secondary">Sign out</button>
     </form>
   </header>
   <main class="content">
