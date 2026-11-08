@@ -1,0 +1,51 @@
+{% extends "app_base.html" %}
+{% block title %}General Settings - InitStack Guard{% endblock %}
+{% block content %}
+    <h1>General Settings</h1>
+    <p class="muted">Every setting has a safe default; a row is stored only when you change it. Changes need your password confirmed within the last {{ window_label }}
+      ({% if reauth_recent %}confirmed right now{% else %}not confirmed right now: <a href="/account">confirm it here</a>, then come back{% endif %}).
+      Some settings are marked as risky and need you to type <code>confirm</code>. Secrets such as API keys are never stored here.</p>
+    {% if message %}<p class="notice" role="status">{{ message }}</p>{% endif %}
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+    {% for group, rows in groups %}
+    <section class="panel wide">
+      <h2>{{ group }}</h2>
+      {% for r in rows %}
+      <form method="post" action="/api/v1/settings/set" class="setting">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="key" value="{{ r.key }}">
+        <div class="setting-head">
+          <code>{{ r.key }}</code>
+          {% if r.custom %}<span class="badge">changed</span>{% else %}<span class="badge badge-quiet">default</span>{% endif %}
+        </div>
+        <p class="muted">{{ r.desc }}</p>
+        {% if r.editable %}
+          {% if r.kind == "bool" %}
+          <select name="value" aria-label="{{ r.key }}">
+            <option value="true"{% if r.value_text == "true" %} selected{% endif %}>On</option>
+            <option value="false"{% if r.value_text == "false" %} selected{% endif %}>Off</option>
+          </select>
+          {% elif r.kind == "enum" %}
+          <select name="value" aria-label="{{ r.key }}">
+            {% for c in r.choices %}<option value="{{ c }}"{% if r.value_text == c %} selected{% endif %}>{{ c }}</option>{% endfor %}
+          </select>
+          {% elif r.kind == "strlist" or r.kind == "json" %}
+          <textarea name="value" rows="{{ r.rows }}" spellcheck="false" aria-label="{{ r.key }}">{{ r.value_text }}</textarea>
+          {% else %}
+          <input name="value" value="{{ r.value_text }}" autocomplete="off" aria-label="{{ r.key }}">
+          {% endif %}
+          {% if r.confirm %}<label>Type <code>confirm</code> to change or reset this <input name="confirm" autocomplete="off"></label>{% endif %}
+          <div class="actions">
+            <button type="submit">Save</button>
+            {% if r.custom %}<button type="submit" class="secondary" formaction="/api/v1/settings/reset">Reset to default</button>{% endif %}
+            <span class="muted">Default: <code>{{ r.default_text|replace("\n", " ") }}</code>{% if r.updated %}. Last changed {{ r.updated }}.{% endif %}</span>
+          </div>
+        {% else %}
+          <pre class="readonly">{{ r.value_text }}</pre>
+        {% endif %}
+      </form>
+      {% endfor %}
+    </section>
+    {% endfor %}
+{% endblock %}

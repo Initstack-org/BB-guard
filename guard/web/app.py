@@ -35,6 +35,7 @@ from ..config import Config
 from . import audit_log
 from . import admins as admins_mod
 from . import limits as limits_mod
+from . import settings_registry
 
 SESSION_COOKIE = "__Host-guard_session"
 PRE_COOKIE = "__Host-guard_pre"
@@ -65,7 +66,7 @@ NAV = [
     ("Administration", [("Administrators", "/admins", True),
                         ("Authentication / Passkeys", "/account", True),
                         ("Audit Log", "/audit", True), ("API Settings", "/settings/api", False),
-                        ("General Settings", "/settings", False),
+                        ("General Settings", "/settings", True),
                         ("Backups and Retention", "/backups", False)]),
 ]
 
@@ -588,6 +589,70 @@ def admins_password(ctx: Ctx) -> Response:
 
 
 # ---------------------------------------------------------------------------------------------
+# General Settings page (docs/API.md section 10.4). All changes are class R (the API plan makes only
+# some keys R; making all of them R is stricter and simpler, owner to confirm). Typed validation lives
+# in guard/web/settings_registry.py. Deviations: HTML form posts with redirects, the key travels in a
+# form field, and there is no JSON registry endpoint.
+
+SETTINGS_FLASH = {"saved": "Setting saved.", "reset": "Setting reset to its default.",
+                  "unchanged": "That setting was already at its default."}
+
+
+def _settings_page(ctx: Ctx, *, status: int = 200, error: str = "", message: str = "",
+                   typed: dict | None = None) -> Response:
+    tz = ctx.admin["timezone"]
+    rows = settings_registry.stored(ctx.conn)
+    grouped: dict = {}
+    for s in settings_registry.REGISTRY:
+        row = rows.get(s.key)
+        value = settings_registry.effective_value(s, row)
+        text = (typed or {}).get(s.key)
+        if text is None:
+            text = settings_registry.display(s, value)
+        grouped.setdefault(s.group, []).append({
+            "key": s.key, "desc": s.desc, "kind": s.kind, "editable": s.editable,
+            "confirm": s.confirm, "choices": s.choices, "custom": row is not None,
+            "value_text": text, "default_text": settings_registry.display(s, s.default),
+            "rows": min(12, max(3, text.count("\n") + 2)),
+            "updated": _format_ms(row["updated_ms"], tz) if row is not None else ""})
+    return _render("settings.html", status, admin=ctx.admin, nav=NAV, current="/settings",
+                   csrf_token=ctx.csrf_token(), groups=list(grouped.items()), error=error,
+                   message=message,
+                   reauth_recent=ctx.state.reauth.is_recent(ctx.session, ctx.now_ms, ctx.limits.reauth_s),
+                   window_label=_window_label(ctx.limits.reauth_s))
+
+
+def settings_get(ctx: Ctx) -> Response:
+    return _settings_page(ctx, message=SETTINGS_FLASH.get(ctx.request.query_params.get("msg", ""), ""))
+
+
+def settings_set(ctx: Ctx) -> Response:
+    key = ctx.form.get("key", "")[:100]
+    raw = ctx.form.get("value", "")[:settings_registry.MAX_JSON_CHARS + 1]
+    try:
+        settings_registry.set_value(ctx.conn, key, raw, confirm=ctx.form.get("confirm", "")[:20],
+                                    admin_id=ctx.admin["id"], admin_name=ctx.admin["username"],
+                                    ip=ctx.ip, now_ms=ctx.now_ms)
+    except settings_registry.SettingError as exc:
+        status = 404 if str(exc) == "Unknown setting." else 400
+        return _settings_page(ctx, status=status, error=f"{key[:60]}: {exc}",
+                              typed={key: raw} if key in settings_registry.BY_KEY else None)
+    return RedirectResponse("/settings?msg=saved", status_code=303)
+
+
+def settings_reset(ctx: Ctx) -> Response:
+    key = ctx.form.get("key", "")[:100]
+    try:
+        changed = settings_registry.reset_value(ctx.conn, key, confirm=ctx.form.get("confirm", "")[:20],
+                                                admin_id=ctx.admin["id"], admin_name=ctx.admin["username"],
+                                                ip=ctx.ip, now_ms=ctx.now_ms)
+    except settings_registry.SettingError as exc:
+        status = 404 if str(exc) == "Unknown setting." else 400
+        return _settings_page(ctx, status=status, error=f"{key[:60]}: {exc}")
+    return RedirectResponse("/settings?msg=" + ("reset" if changed else "unchanged"), status_code=303)
+
+
+# ---------------------------------------------------------------------------------------------
 # Application
 
 
@@ -643,6 +708,9 @@ def create_app(cfg: Config, *, hasher=None, clock: Callable[[], int] = db.now_ms
     table.add("/api/v1/admins/disable", admins_disable, "R", methods=("POST",))
     table.add("/api/v1/admins/enable", admins_enable, "R", methods=("POST",))
     table.add("/api/v1/admins/password", admins_password, "R", methods=("POST",))
+    table.add("/settings", settings_get, "A")
+    table.add("/api/v1/settings/set", settings_set, "R", methods=("POST",))
+    table.add("/api/v1/settings/reset", settings_reset, "R", methods=("POST",))
     table.add("/api/v1/account/password", account_password, "W", methods=("POST",))
     table.add("/api/v1/reauth/password", reauth_password, "W", methods=("POST",))
     table.add("/api/v1/account/sessions/revoke", session_revoke, "W", methods=("POST",))

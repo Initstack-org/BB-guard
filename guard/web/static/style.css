@@ -44,4 +44,14 @@ code { font-size:13px; }
 .filters .actions { display:flex; gap:12px; align-items:center; margin:12px 0; }
 .badge { display:inline-block; padding:1px 8px; border:1px solid var(--line); border-radius:10px; font-size:12px; }
 .badge-failure, .badge-denied { color:var(--err); border-color:var(--err); }
+.badge-quiet { color:var(--muted); }
+.setting { padding:12px 0; border-bottom:1px solid var(--line); }
+.setting:last-child { border-bottom:0; }
+.setting-head { display:flex; gap:8px; align-items:center; }
+.setting p { margin:4px 0 8px; }
+.setting select { display:block; min-width:200px; padding:8px; font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:6px; }
+.setting textarea { display:block; width:100%; max-width:640px; padding:8px; font:13px/1.4 ui-monospace, monospace; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:6px; }
+.setting input { max-width:420px; }
+.setting .actions { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin:8px 0 0; }
+pre.readonly { margin:0; font-size:13px; white-space:pre-wrap; }
 @media (max-width: 700px) { body.app { flex-direction:column; } .sidebar { width:auto; border-right:0; border-bottom:1px solid var(--line); } }

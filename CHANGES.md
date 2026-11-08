@@ -13,6 +13,16 @@ All times are UTC (ISO 8601, `Z` suffix). Rule changed by the owner on 2026-11-0
 
 ## Log
 
+### 2026-11-08: General Settings page added (untested)
+- **Added** `guard/web/settings_registry.py`: the full settings registry from SCHEMA.md section 6 (type, default, bounds, description per key) with typed parsing and validation, `set_value` and `reset_value` (transactional, audited as `settings.update` / `settings.reset` with old and new values), and the rules below. Added `templates/settings.html`, CSS, and handlers in `guard/web/app.py`: `GET /settings` (class A), `POST /api/v1/settings/set` and `/api/v1/settings/reset` (class R). General Settings is now a live sidebar link.
+- **Rules enforced:** numbers are range-checked, using the same bounds `guard/web/limits.py` applies when reading the `auth.*` settings; JSON settings (`enforcement.paths`, `intel.policy`, `auth.throttle`) must have exactly the documented shape; `intel.policy` cannot contain hosting or crawler and `min_confidence` must stay null (GOAL rule 5, SCHEMA open item 6); host names, paths, the appeal URL (empty or http/https) and time zone names are validated; `auth.password_login_enabled` can only be turned off when every enabled administrator has a passkey (so today it cannot be turned off, because passkeys are not built); the risky `enforcement.*` settings and `auth.password_login_enabled` need the word `confirm` typed.
+- **Read-only here:** `retention.*` and `backup.*` are shown but cannot be changed on this page; they belong to the Backups and Retention page, whose preview step protects against deleting data by accident (not built yet).
+- **Deviations from API.md 10.4, owner to confirm:** every change is class R (the plan makes only some keys R); form posts with redirects, the key in a form field, no JSON registry endpoint, no `expected_updated_ms` lost-update check; a stale re-authentication gives the plain-text 403.
+- **Not consumed yet:** only the `auth.*` settings affect running code today. The rest are stored and validated but nothing reads them until their stages are built.
+- **Added** `tests/test_web_settings.py` (about 60 cases). **Not run.**
+- Used the Mac's file tools in `~/Desktop/guard/` only. Nothing was run on the Mac or the server, and nothing was installed or changed outside this folder.
+- **Still to do from the owner's list:** Stage 3 passkeys (needs the `webauthn` package installed on the Mac) and Stage 4 traffic ingest, visitors and URL history. Both are large and are being done one at a time.
+
 ### 2026-11-08: Administrators page added (untested); first green test run recorded
 - **Test status:** the owner's `pytest` run on the Mac (Python 3.9.6) passed after the two fixes in the previous entry. That is the first run on a real machine of everything before this entry, including `Argon2Hasher` being installed (tests still use the fake hasher).
 - **Added** `guard/web/admins.py` (list, disable, enable with the safety rules), `templates/admins.html`, and handlers and routes in `guard/web/app.py`: `GET /admins` (class A) and four class R routes: `POST /api/v1/admins` (create), `/api/v1/admins/disable`, `/enable`, `/password` (set another admin's password, audited as `admin.password_reset`). Administrators is now a live sidebar link.
