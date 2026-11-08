@@ -1,0 +1,28 @@
+:root { --bg:#f6f7f9; --fg:#1b1f24; --muted:#5b6570; --card:#fff; --line:#d8dde3; --accent:#0b5fff; --err:#b3261e; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#14171a; --fg:#e6e9ec; --muted:#9aa4af; --card:#1d2227; --line:#2e353c; --accent:#6c9bff; --err:#ff8a80; }
+}
+* { box-sizing: border-box; }
+body { margin:0; font:15px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+body.centered { display:flex; min-height:100vh; align-items:center; justify-content:center; padding:16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:24px; }
+.login { width:100%; max-width:360px; }
+.login h1 { font-size:20px; margin:0 0 16px; }
+label { display:block; margin:12px 0; font-size:13px; color:var(--muted); }
+input { display:block; width:100%; margin-top:4px; padding:8px; font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:6px; }
+button { padding:8px 14px; font:inherit; color:#fff; background:var(--accent); border:0; border-radius:6px; cursor:pointer; }
+.error { color:var(--err); margin:0 0 8px; }
+.muted { color:var(--muted); font-size:13px; }
+body.app { display:flex; min-height:100vh; }
+.sidebar { width:230px; flex:none; background:var(--card); border-right:1px solid var(--line); padding:16px 12px; }
+.brand { font-weight:600; margin-bottom:12px; }
+.nav-section { margin:16px 8px 4px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+.sidebar ul { list-style:none; margin:0; padding:0; }
+.sidebar a, .sidebar .disabled { display:block; padding:6px 8px; border-radius:6px; color:var(--fg); text-decoration:none; }
+.sidebar a[aria-current="page"] { background:var(--bg); font-weight:600; }
+.sidebar .disabled { color:var(--muted); opacity:.6; }
+.main { flex:1; min-width:0; }
+.topbar { display:flex; justify-content:flex-end; align-items:center; gap:12px; padding:10px 20px; background:var(--card); border-bottom:1px solid var(--line); }
+.topbar form { margin:0; }
+.content { padding:20px; }
+@media (max-width: 700px) { body.app { flex-direction:column; } .sidebar { width:auto; border-right:0; border-bottom:1px solid var(--line); } }

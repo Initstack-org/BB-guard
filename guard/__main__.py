@@ -1,4 +1,4 @@
-"""`python -m guard` runs the admin CLI until the web service entry point exists (Stage 2, web layer)."""
+"""`python -m guard <command>` runs guard-admin; `python -m guard serve` starts the dashboard."""
 
 import sys
 

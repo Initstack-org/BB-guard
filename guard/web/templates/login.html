@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Sign in - InitStack Guard{% endblock %}
+{% block body_class %}centered{% endblock %}
+{% block body %}
+<main class="card login">
+  <h1>InitStack Guard</h1>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  {% if password_enabled %}
+  <form method="post" action="/login/password" autocomplete="on">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Username <input name="username" autocomplete="username" required maxlength="64" autofocus></label>
+    <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit">Sign in</button>
+  </form>
+  {% else %}
+  <p>Password sign-in is turned off.</p>
+  {% endif %}
+  <p class="muted">Passkey sign-in is not available yet.</p>
+</main>
+{% endblock %}

@@ -2,7 +2,7 @@
 
     python -m guard.cli [--env FILE] [--secrets FILE] <command>
 
-Commands: doctor, migrate, create-admin, reset-password, list-admins.
+Commands: doctor, migrate, create-admin, reset-password, list-admins, serve.
 Passwords are read with a no-echo prompt only: never from argv, the environment or a pipe.
 """
 
@@ -107,6 +107,32 @@ def cmd_list_admins(args, out, **_) -> int:
     return 0
 
 
+def cmd_serve(args, out, **_) -> int:
+    """Run the dashboard listener (Stage 2 web layer). The internal listener comes in Stage 6."""
+    try:
+        import uvicorn  # noqa: PLC0415
+    except ImportError:
+        out("error: uvicorn is not installed (pip install uvicorn)")
+        return 1
+    from .web.app import create_app  # noqa: PLC0415
+    cfg = load_config(args.env, args.secrets)
+    conn = db.connect(cfg.db_path, readonly=True)
+    try:
+        version = db.current_version(conn)
+    finally:
+        conn.close()
+    if version != len(db.load_migrations()):
+        out(f"error: database schema is at version {version}; run the migrate command first")
+        return 1
+    app = create_app(cfg)  # raises MissingDependency when argon2-cffi is not installed
+    host, port = cfg.dashboard_bind
+    out(f"dashboard listening on {host}:{port} (origin {cfg.external_origin})")
+    # No proxy header handling and no access log: client IP rules live in guard.web.app.client_ip,
+    # and request lines are not logged (docs/ARCHITECTURE.md section 8, GOAL.md rule 12).
+    uvicorn.run(app, host=host, port=port, proxy_headers=False, server_header=False, access_log=False)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="guard-admin")
     parser.add_argument("--env", default=os.environ.get("GUARD_ENV_FILE"))
@@ -122,6 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("username")
     p.set_defaults(func=cmd_reset_password)
     sub.add_parser("list-admins").set_defaults(func=cmd_list_admins)
+    sub.add_parser("serve").set_defaults(func=cmd_serve)
     return parser
 
 

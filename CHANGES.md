@@ -5,12 +5,23 @@ All times are UTC (ISO 8601, `Z` suffix). Rule changed by the owner on 2026-11-0
 
 ## Status
 
-- **Last updated:** 2026-11-08T08:38Z
+- **Last updated:** 2026-11-08T08:57Z
 - **Current:** Stage 1 (architecture, schema, API plan) is fully written: `docs/ARCHITECTURE.md`, `docs/SUBSYSTEMS.md`, `docs/SCHEMA.md`, `docs/API.md`, plus `PROGRESS.md`. Waiting for the owner's review, which is the Stage 1 exit criterion.
-- **Stage 2:** the library layer (config, migrations runner, audit, passwords, sessions, throttle, CSRF, account service, admin CLI) and its 129 tests exist. The tests passed in Claude's sandbox; they have not been run on the Mac. The web application does not exist yet.
-- **Next:** (1) owner runs `pytest` on the Mac, (2) owner reviews the Stage 1 documents, (3) then the Stage 2 web layer (login routes, cookies, health check) and Stage 3 passkeys. The open questions at the end of each design doc and the server facts in `ARCHITECTURE.md` section 15 are still needed.
+- **Stage 2:** the library layer (129 tests) and now a first web layer exist: sign-in, sign-out, health check, static files, dashboard shell, `serve` command (50 more tests). All tests passed in Claude's sandbox only; none have been run on the Mac. `guard-admin serve` has never been run.
+- **Next:** (1) owner runs `pip install starlette jinja2 uvicorn argon2-cffi pytest` then `pytest` on the Mac, (2) owner reviews the Stage 1 documents, (3) Stage 3 passkeys, then the account page and re-authentication routes. The open questions at the end of each design doc and the server facts in `ARCHITECTURE.md` section 15 are still needed.
 
 ## Log
+
+### 2026-11-08T08:57Z: Stage 2 web layer written and tested (sandbox); built on Starlette, not FastAPI
+- **Design deviation, needs owner confirmation.** `ARCHITECTURE.md` D1 names FastAPI. The sandbox has Starlette (FastAPI's base) but not FastAPI or httpx, so the web layer is written directly on Starlette. That let the tests actually run. Starlette is a hard dependency of FastAPI, so nothing in the design is lost, and routes could later be mounted under FastAPI if wanted. Side effects: no `/docs`, `/redoc` or `/openapi.json` exist at all (API.md wanted them disabled); request validation is hand-written instead of Pydantic models. Say if you want FastAPI instead.
+- **Added** `guard/web/app.py`: `create_app`, a `RouteTable` that forces every route to declare one class from API.md section 2 (P, A, W, R) and a request wrapper that enforces it (session for A, CSRF token plus Origin/Referer for W, recent re-authentication for R); host check returning 421; security headers and the page CSP from API.md section 1; trusted client IP (`X-Guard-Client-Ip` only from a loopback peer); routes `GET /login`, `POST /login/password`, `POST /logout`, `GET /`, `GET /healthz`, `/static`. Handlers run in the threadpool with their own SQLite connection. Form bodies are parsed with the standard library (no python-multipart), capped at 64 KB.
+- **Added** templates `base.html`, `login.html`, `dashboard.html` and `static/style.css` (no inline scripts or styles, so the CSP holds). The sidebar uses the exact sections from GOAL.md; pages not built yet are greyed out.
+- **Added** `serve` to `guard/cli.py` (`python -m guard serve`): refuses to start if migrations are pending, uvicorn with proxy headers off and the access log off. Updated `guard/__main__.py` text.
+- **Added** `tests/web_client.py` (minimal ASGI client, no httpx) and `tests/test_web.py` (50 tests; see `PROGRESS.md` for what they cover).
+- **Run:** 50 passed in Claude's sandbox (Python 3.13.18, Starlette 1.7.0, Jinja2 3.1.6). The sandbox ran a trimmed rebuilt copy of the earlier library modules (the copy tool still cannot move files off the Mac); the new files on the Mac match the sandbox copies by byte size. The two test failures seen along the way were bugs in the tests themselves (a client that replaced an empty Host header with the default, and a test that scraped a token from a page that no longer has the form), fixed in the tests, not the app.
+- **Not run:** `serve`, uvicorn, Argon2Hasher, the web tests against all six real migrations.
+- **Defaults chosen, unconfirmed:** session idle 30 min, absolute 12 h, re-authentication window 5 min, pre-session cookie 15 min, all constants in `app.py`. A failed sign-in keeps the same pre-session cookie so the page can be resubmitted. Logout marks the session revoked (kept a week by the cleanup job) instead of deleting the row as API.md says; the effect for the user is the same.
+- Used the Mac's file tools to write files in `~/Desktop/Guard/` only. Nothing was run on the Mac or the server, and nothing was installed or changed outside this folder.
 
 ### 2026-11-08T08:38Z: Stage 2 library code found, tested and fixed; tests and pytest.ini added
 - **Found unlogged work.** `guard/` already held Stage 2 code (`config.py`, `db.py`, `audit.py`, `cli.py`, `auth/{csrf,passwords,service,sessions,throttle}.py`, `migrations/0001`-`0006`), written at 03:23-03:24 local time, after the last log entry. `tests/` was empty. `PROGRESS.md` still said Stage 2 was not started. I read all of it and treated it as the starting point. This work began before the owner reviewed Stage 1; `PROGRESS.md` now says so.
