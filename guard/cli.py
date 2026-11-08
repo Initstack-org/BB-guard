@@ -220,10 +220,28 @@ def cmd_serve(args, out, **_) -> int:
         ingest_thread = IngestThread(cfg.db_path, cfg.access_log, cfg.trusted_connectors, report=out)
         ingest_thread.start()
         out(f"ingest: reading {cfg.access_log} in the background every {ingest_thread.interval_s:g}s")
+    # Background worker (IPLogs lookups, Tor feed, rule expiry) and the internal listener Nginx calls.
+    from .internal import create_internal_app  # noqa: PLC0415
+    from .worker import Worker  # noqa: PLC0415
+    worker = Worker(cfg.db_path, token=cfg.iplogs_token, report=out)
+    worker.start()
+    internal_server = None
+    if not getattr(args, "no_internal", False):
+        import threading  # noqa: PLC0415
+        ihost, iport = cfg.internal_bind
+        internal_server = uvicorn.Server(uvicorn.Config(
+            create_internal_app(cfg, worker=worker), host=ihost, port=iport, proxy_headers=False,
+            server_header=False, access_log=False, log_level="warning"))
+        internal_server.install_signal_handlers = lambda: None  # only the main thread handles signals
+        threading.Thread(target=internal_server.run, name="guard-internal", daemon=True).start()
+        out(f"internal listener (Nginx /check and /block) on {ihost}:{iport}")
     try:
         uvicorn.run(app, host=host, port=port, proxy_headers=False, server_header=False, access_log=False,
                     **tls)
     finally:
+        if internal_server is not None:
+            internal_server.should_exit = True
+        worker.stop()
         if ingest_thread is not None:
             ingest_thread.stop()
     return 0
@@ -262,6 +280,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("serve", help="run the dashboard (and ingest, when GUARD_ACCESS_LOG is set)")
     p.add_argument("--no-ingest", action="store_true",
                    help="do not read the access log in the background")
+    p.add_argument("--no-internal", action="store_true",
+                   help="do not start the internal listener (Nginx /check and /block)")
     p.set_defaults(func=cmd_serve)
     return parser
 

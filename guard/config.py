@@ -69,6 +69,14 @@ def _is_loopback_host(host: str) -> bool:
 _TRUE = ("1", "true", "yes", "on")
 
 
+def _clean_token(text: str) -> str:
+    """An optional API token: printable ASCII without spaces, so it can never break a header line."""
+    text = text.strip()
+    if text and (len(text) > 512 or not text.isascii() or not text.isprintable() or " " in text):
+        raise ConfigError("GUARD_IPLOGS_TOKEN must be printable ASCII without spaces (at most 512 characters)")
+    return text
+
+
 @dataclass(frozen=True)
 class Config:
     db_path: str
@@ -82,6 +90,7 @@ class Config:
     tls_cert: str = ""    # optional: serve the dashboard over HTTPS itself (local testing)
     tls_key: str = ""
     secret_key: bytes = field(default=b"", repr=False)
+    iplogs_token: str = field(default="", repr=False)  # optional bearer token from secrets.env
 
     @property
     def rp_id(self) -> str:
@@ -172,4 +181,5 @@ def load_config(env_path: str | None = None, secrets_path: str | None = None,
         tls_cert=tls_cert,
         tls_key=tls_key,
         secret_key=_decode_key(need("GUARD_SECRET_KEY")),
+        iplogs_token=_clean_token(values.get("GUARD_IPLOGS_TOKEN", "")),
     )
