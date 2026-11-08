@@ -1,0 +1,58 @@
+# CHANGES
+
+Running log of the major changes Claude makes in this project, newest entry first.
+All times are UTC (ISO 8601, `Z` suffix). Rule changed by the owner on 2026-11-08T08:09Z: only major items are logged here (new or rewritten documents, design decisions, plan changes, anything installed or changed outside this folder), not every action. The earlier rule, which logged every action, applies to the entries below it. The Status block is refreshed with each entry.
+
+## Status
+
+- **Last updated:** 2026-11-08T08:38Z
+- **Current:** Stage 1 (architecture, schema, API plan) is fully written: `docs/ARCHITECTURE.md`, `docs/SUBSYSTEMS.md`, `docs/SCHEMA.md`, `docs/API.md`, plus `PROGRESS.md`. Waiting for the owner's review, which is the Stage 1 exit criterion.
+- **Stage 2:** the library layer (config, migrations runner, audit, passwords, sessions, throttle, CSRF, account service, admin CLI) and its 129 tests exist. The tests passed in Claude's sandbox; they have not been run on the Mac. The web application does not exist yet.
+- **Next:** (1) owner runs `pytest` on the Mac, (2) owner reviews the Stage 1 documents, (3) then the Stage 2 web layer (login routes, cookies, health check) and Stage 3 passkeys. The open questions at the end of each design doc and the server facts in `ARCHITECTURE.md` section 15 are still needed.
+
+## Log
+
+### 2026-11-08T08:38Z: Stage 2 library code found, tested and fixed; tests and pytest.ini added
+- **Found unlogged work.** `guard/` already held Stage 2 code (`config.py`, `db.py`, `audit.py`, `cli.py`, `auth/{csrf,passwords,service,sessions,throttle}.py`, `migrations/0001`-`0006`), written at 03:23-03:24 local time, after the last log entry. `tests/` was empty. `PROGRESS.md` still said Stage 2 was not started. I read all of it and treated it as the starting point. This work began before the owner reviewed Stage 1; `PROGRESS.md` now says so.
+- **Added** `pytest.ini` and ten test files in `tests/` (129 tests): migrations, audit, config, passwords, throttle, sessions, CSRF, account service and sign-in, CLI. They use a fake password hasher, so they need only pytest, not argon2-cffi.
+- **Ran** them in Claude's sandbox (Python 3.13.18, SQLite 3.53.1, pytest 9.1.1): 129 passed. The copy tool could not move files from the Mac, so I rebuilt the package in the sandbox from the contents I read, then applied the fixes below to the Mac files and checked byte sizes match. Not run on the Mac. `Argon2Hasher` itself was not exercised (argon2-cffi not installed there).
+- **Bugs the tests found, fixed in the Mac files:**
+  - `db.connect(readonly=True)` built a SQLite URI from the raw path. A path containing `#` or `?` silently opened the wrong thing and reported schema version 0. `doctor` and `list-admins` use that mode. The path is now percent-encoded.
+  - A missing or unreadable env file raised `FileNotFoundError` with a traceback. It is now a `ConfigError` with a clean message.
+  - Bind ports were not range-checked (0, 65536 and 99999 were accepted). Now 1 to 65535.
+  - Running `create-admin`, `list-admins` or `reset-password` before `migrate` printed a raw SQLite traceback. Any SQLite error now prints a one-line message that says to run `migrate`.
+  - The CLI docstring says passwords are "never from a pipe", but `getpass` quietly accepts piped input (it only warns). The default prompt now refuses when stdin is not a terminal. This is a behaviour change: scripted installs cannot pipe a password in. Revert `_tty_prompt` in `cli.py` if you want that.
+- **Not fixed, recorded in `PROGRESS.md`:** audit rows are written for every failed or locked sign-in (growth until retention exists); the code sets no permissions on the DB file and does not check env-file permissions; the per-username lock can be used to lock out a known admin name.
+- Used the Mac's file tools to read and write files in `~/Desktop/guard/` only. Nothing was run on the Mac or the server, and nothing was installed or changed outside this folder.
+
+### 2026-11-08T08:09:31Z: Stage 1 documents completed (API.md, PROGRESS.md; SCHEMA.md and SUBSYSTEMS.md reconciled)
+- **Logging rule changed** by the owner: only major items go in this file from now on.
+- `docs/SCHEMA.md` was already on disk when this session began. It was written at the end of the previous session and never logged. I read it in full. Its tables, indexes and triggers are unchanged. I added one settings row, `auth.reauth_window_s` (300 s, marked new), and mentioned it in its open item 3.
+- `docs/SUBSYSTEMS.md` did not match `SCHEMA.md`, although `SCHEMA.md` says it had been edited to match. Fixed: ingest state and `request_id`, the per-request rows and rollup table names, the `ip_intel` columns, passkey revoke deleting the row, `component_health` being a table, and the companion links. Also corrected the migration file names in `docs/ARCHITECTURE.md` section 11.
+- Created `docs/API.md`: both listeners, route classes (internal, public, admin read, admin write, write with re-authentication), rate-limit classes, every dashboard and internal route with its audit action, the audit action list, and the Stage 9 route-authorization sweep. Six open items for the owner at the end, the first being that new administrators have no enforced password change (the schema has no flag for it).
+- Created `PROGRESS.md`: stage table (Stage 1 written, awaiting review; Stages 2 to 9 not started), acceptance items A to K, what has actually been run, blockers.
+- Plan unchanged: Stage 1 is still four design docs plus `PROGRESS.md`. Stage 1 is not complete until the owner reviews it.
+- Used the Mac's file tools to read and write files in `~/Desktop/guard/` only. No commands were run on the Mac or the server, and nothing was installed or changed outside this folder.
+
+### 2026-11-08T07:54:43Z: Created docs/SUBSYSTEMS.md
+- Resumed the session from `CHANGES.md` and `ARCHITECTURE.md` (read both, plus `GOAL.md`). Listed `docs/`: only `ARCHITECTURE.md` existed.
+- Created `docs/SUBSYSTEMS.md` with eight sections: conventions, ingest, IP intelligence, URL rules, block page, MyBB injections, auth and passkeys, jobs/backups/retention. Section numbers 3 (IP intelligence) and 4 (URL rules) match the references in `ARCHITECTURE.md`.
+- Still unverified and flagged in section 3.1: IPLogs authentication, rate limits and the meaning of `confidence`. These must be checked against the official docs before Stage 5.
+- Defaults chosen in this file that the owner has not confirmed (all marked as proposals in the text): lookup rate limit 30 per minute, cache TTLs (24 hours ok, 5 minutes error, 7 days stale grace), Tor feed every 3 hours, session idle 30 minutes and absolute 12 hours, minimum password length 12, CSV export cap 100,000 rows.
+- Used the Mac's file tools to read and write files in `~/Desktop/guard/` only. Sandbox used only to read the UTC clock. No commands were run on the Mac or the server. Nothing was installed or changed outside this folder.
+
+### 2026-11-08T07:40:31Z: Created docs/ARCHITECTURE.md
+- Created `docs/ARCHITECTURE.md` (written seconds before this entry was logged). Contents: system context and trust boundaries, 14 key decisions (D1 to D14), process model, request flow, decision pipeline, failure matrix, trusted-client-IP design, Nginx integration sketch, deployment layout, repository layout, verification plan per stage, 13 known limitations, 12 open questions with the assumption used for each, and the facts still needed from the server.
+- Plan change: Stage 1 is now four design docs rather than three. `docs/SUBSYSTEMS.md` is added for the detailed subsystem designs (ingest, IP intelligence, URL rules, block page, MyBB, auth, jobs) so that `ARCHITECTURE.md` stays reviewable. `docs/SCHEMA.md`, `docs/API.md` and `PROGRESS.md` are unchanged in the plan.
+- Clock check: the Mac reported `CHANGES.md` as modified at 02:34:38 EST, which is 07:34:38Z. The sandbox clock said 07:34:05Z just before that write, so the two agree and the sandbox UTC clock is used for all timestamps in this file.
+- No commands were run on the Mac or the server. Nothing was installed or changed outside this folder.
+
+### 2026-11-08T07:34:05Z: Created CHANGES.md
+- Created `CHANGES.md` (this file) at the owner's request.
+- Read-only check of Claude's sandbox: Python 3.12.3 with `jinja2` and `cryptography`; `fastapi`, `uvicorn`, `webauthn`, `argon2` and `pytest` are not installed and the sandbox has no network. Consequence: Claude cannot run the full test suite itself. Tests for later stages have to be run on the Mac or the server, except pure-Python logic (URL normalization, redaction, rule matching), which can be checked in the sandbox.
+
+### 2026-11-08, time not recorded: Session start, before this log existed
+All read-only; no project files were changed.
+- Listed `/Users/colin/Desktop/guard`. It contains `GOAL.md` plus empty folders: `deploy/nginx`, `deploy/systemd`, `docs`, `guard/auth`, `guard/migrations`, `guard/web/static`, `guard/web/templates`, `tests`. `PROGRESS.md` and `docs/SPEC.md` do not exist.
+- Read `GOAL.md` in full.
+- Researched the IPLogs API with two web searches. The official docs page (`iplogs.com/docs`) could not be fetched, so the findings come from the project's public README and third-party pages. They will be marked as unverified in the design docs.

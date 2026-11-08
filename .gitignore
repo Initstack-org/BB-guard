@@ -1,0 +1,27 @@
+# Secrets and local configuration: never commit these
+*.env
+.env*
+secrets*
+*.pem
+*.key
+
+# Databases, backups and exports
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.bak
+backups/
+exports/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# macOS
+.DS_Store
