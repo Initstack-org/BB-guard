@@ -177,3 +177,23 @@ def test_the_record_is_immutable():
     rec = parse(log_line())
     with pytest.raises(dataclasses.FrozenInstanceError):
         rec.ip = "1.2.3.4"
+
+
+# ---- invalid UTF-8 from the client (Nginx escape=json passes bytes >= 0x80 through) ------------------
+
+def _with_ua_bytes(ua_bytes: bytes) -> bytes:
+    return json.dumps(log_dict(ua="@@"), ensure_ascii=False).encode().replace(b"@@", ua_bytes)
+
+
+@pytest.mark.parametrize("ua_bytes", [b"Agent\xff/1.0", b"Agent\xed\xa0\x80/1.0", b"Agent\xc0\xaf/1.0"])
+def test_invalid_utf8_keeps_the_request_and_stores_valid_text(ua_bytes):
+    rec = parse(_with_ua_bytes(ua_bytes))
+    assert rec.ip == "203.0.113.7" and rec.user_agent.startswith("Agent")
+    rec.user_agent.encode("utf-8")  # must not raise: SQLite needs valid text
+
+
+def test_a_json_escaped_lone_surrogate_is_neutralized_everywhere():
+    rec = parse(json.dumps(log_dict(ua="a\ud800b", ref="http://e.org/\udfff", u="/p\ud800?q=\ud800",
+                                    un="n\ud800", uid="3")).encode())
+    for value in (rec.user_agent, rec.referrer, rec.path, rec.query, rec.mybb_username):
+        value.encode("utf-8")

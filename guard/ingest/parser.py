@@ -139,9 +139,13 @@ def parse_line(raw: bytes, *, trusted: tuple, managed_hosts: frozenset) -> Recor
     """
     if len(raw) > MAX_LINE_BYTES:
         raise ParseError("line too long")
+    # Decode ourselves. Nginx's escape=json passes bytes >= 0x80 through untouched, so a client can put
+    # invalid UTF-8 in a header. json.loads(bytes) would reject the whole line (hiding that request) or,
+    # for encoded surrogates, accept it and crash the database write. Replacement characters keep the
+    # request recorded and the stored text valid.
     try:
-        obj = json.loads(raw)
-    except (ValueError, RecursionError) as exc:  # includes UnicodeDecodeError and JSONDecodeError
+        obj = json.loads(raw.decode("utf-8", errors="replace"))
+    except (ValueError, RecursionError) as exc:  # includes JSONDecodeError
         raise ParseError("not valid JSON") from exc
     if not isinstance(obj, dict):
         raise ParseError("not a JSON object")

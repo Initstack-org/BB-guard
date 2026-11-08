@@ -140,7 +140,8 @@ Request outcome vocabulary: `allowed`, `denied`, `overridden`, `monitored`, and 
 - Nginx's `real_ip` module is the only place trust is decided: `set_real_ip_from 192.168.1.148; real_ip_header CF-Connecting-IP;`.
 - The JSON log records both `$remote_addr` (after real_ip) and `$realip_remote_addr` (the actual peer). Ingest checks them: if the peer is not a trusted connector, it uses the peer address and counts a mismatch.
 - The dashboard vhost sets `X-Guard-Client-Ip $remote_addr` (overwriting anything the client sent). The dashboard listener honours that header only when the TCP peer is loopback; otherwise it uses the peer address.
-- Guard never reads `X-Forwarded-For`, `CF-Connecting-IP` or similar itself.
+- **Direct connector mode (added 2026-11-08, owner's request):** when `cloudflared` connects straight to the dashboard listener (no Nginx in front of it), the listener honours `CF-Connecting-IP` only when the TCP peer is one of `GUARD_TRUSTED_CONNECTORS`. In that mode the dashboard may bind to one specific private address (`GUARD_DASHBOARD_ALLOW_LAN`), and Guard itself refuses connections from any peer that is neither loopback nor a trusted connector. The internal listener stays loopback-only. Cost: connector-to-Guard traffic is plain HTTP on the LAN, and Nginx's request limits and logging are not in front of the dashboard.
+- Guard never reads `X-Forwarded-For` or similar, and never reads `CF-Connecting-IP` from an untrusted peer.
 - Stage 9 tests: a request from an untrusted peer carrying a forged `CF-Connecting-IP` is logged and decided under the peer's address.
 
 ## 9. Nginx integration (sketch)

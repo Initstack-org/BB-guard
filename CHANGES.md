@@ -5,14 +5,32 @@ All times are UTC (ISO 8601, `Z` suffix). Rule changed by the owner on 2026-11-0
 
 ## Status
 
-- **Last updated:** 2026-11-08T12:01Z
-- **Latest (12:01Z):** found unlogged Stage 4 ingest code and the unlogged Administrators and General Settings pages' state; found and fixed an ingest stall (hostile bytes in a header); docs brought up to date. See the first log entry. The pages and ingest tests have not been run on the Mac.
+- **Last updated:** 2026-11-08
+- **Latest:** direct tunnel-connector mode (CF-Connecting-IP from a trusted connector, opt-in LAN bind, connection gate). Tests written, not run. See the first log entry.
+- **Previous:** `ingest` CLI command and `GUARD_ACCESS_LOG` setting added, with tests that have not been run anywhere. See the first log entry.
+- **Previous (12:01Z):** found unlogged Stage 4 ingest code and the unlogged Administrators and General Settings pages' state; found and fixed an ingest stall (hostile bytes in a header); docs brought up to date. See the first log entry. The pages and ingest tests have not been run on the Mac.
 - **Current:** Stage 1 (architecture, schema, API plan) is fully written: `docs/ARCHITECTURE.md`, `docs/SUBSYSTEMS.md`, `docs/SCHEMA.md`, `docs/API.md`, plus `PROGRESS.md`. Waiting for the owner's review, which is the Stage 1 exit criterion.
 - **Stage 2:** the library layer, the web layer (sign-in, sign-out, health, dashboard shell, `serve`), the account page, Audit Log, Administrators and General Settings pages exist. The Mac run (Python 3.9.6) is green for everything up to the Audit Log and account pages; Administrators and General Settings tests are written but not run. `guard serve` has never been run.
 - **Audit Log page (11:21Z):** `/audit` page added (filters, keyset paging, 31 tests). Passed on the Mac; the two failures in the first full run were fixed and a second run passed.
-- **Next:** (1) owner runs `pip install starlette jinja2 uvicorn argon2-cffi pytest` then `pytest` on the Mac and reports the result, (2) owner reviews the Stage 1 documents and answers the batch-retry question, (3) wire ingest into the CLI and service, then Visitors and URL History pages, (4) Stage 3 passkeys. The open questions at the end of each design doc and the server facts in `ARCHITECTURE.md` section 15 are still needed.
+- **Next:** (1) owner runs `pip install starlette jinja2 uvicorn argon2-cffi pytest` then `pytest` on the Mac and reports the result, (2) owner reviews the Stage 1 documents and answers the batch-retry question, (3) run ingest inside the service, then Visitors and URL History pages, (4) Stage 3 passkeys. The open questions at the end of each design doc and the server facts in `ARCHITECTURE.md` section 15 are still needed.
 
 ## Log
+
+### 2026-11-08: Direct tunnel-connector mode (untested); design change owner asked for
+- **Why:** the owner will run cloudflared straight at Guard (no Nginx in front of the dashboard) and asked that every visitor not be lumped together as the connector. Guard's throttle and audit log are keyed by client IP, so without this one visitor's lockout would apply to all.
+- **Design change** (`docs/ARCHITECTURE.md` section 8, README "Behind a Cloudflare tunnel"): the dashboard listener now also honours `CF-Connecting-IP`, but only when the TCP peer is one of `GUARD_TRUSTED_CONNECTORS`; a missing or malformed header falls back to the connector's address. Still never read: `X-Forwarded-For`, or `CF-Connecting-IP` from any other peer. `X-Guard-Client-Ip` from loopback is unchanged.
+- **Config** (`guard/config.py`): new `GUARD_DASHBOARD_ALLOW_LAN` (off by default). With it on, `GUARD_DASHBOARD_BIND` may be one specific private IP address (not `0.0.0.0`, not public, not a name) and `GUARD_TRUSTED_CONNECTORS` must be set. The internal listener stays loopback-only. `GUARD_TRUSTED_CONNECTORS` entries are now validated as IP addresses (a CIDR or name is an error; before, anything was accepted). New `Config.dashboard_on_lan`.
+- **Web** (`guard/web/app.py`): `client_ip` rule above; when the bind is not loopback, `SecurityMiddleware` returns a bare 403 to any peer that is neither loopback nor a trusted connector, before the host check and before any page. `serve` prints a note when on the LAN.
+- **Tests:** `tests/test_web_lan.py`. **Not run anywhere.** The "lockout does not lock everyone" test loops up to 60 failed sign-ins and assumes the default throttle trips by then.
+- **Known costs:** plain HTTP between connector and Guard; no Nginx request limits or logging in front of the dashboard; the per-username lock still lets someone who knows an admin username lock that account (pre-existing, documented in `throttle.py`). If the connector ever forwards a `CF-Connecting-IP` it did not get from Cloudflare, Guard would trust it (the same trust Nginx `real_ip` placed in it).
+- **Not changed:** ingest, which reads the Nginx log and is unaffected; the Nginx sketch in section 9 (still describes the forum vhost). Nothing run on the Mac or the server; nothing installed or changed outside this folder.
+
+### 2026-11-08: `ingest` CLI command added (untested)
+- **Added** `GUARD_ACCESS_LOG` to `guard/config.py` (optional, must be an absolute path, no NUL). Empty by default; the design's spool path is `/var/log/nginx/guard/access.jsonl`.
+- **Added** `python -m guard ingest [--follow] [--interval N]` in `guard/cli.py`. One pass by default: runs `runner.drain`, records the `ingest` health heartbeat, prints `lines/written/duplicates/bad_lines/peer_mismatches/gaps`. A missing log file is an error for a single pass (the tailer would otherwise report an empty pass). `--follow` repeats every N seconds (1 to 3600, default 5) until Ctrl-C, reports a repeated error once, and keeps retrying. It refuses to run if the database is not fully migrated or `GUARD_ACCESS_LOG` is unset.
+- **Added** `tests/test_cli_ingest.py` (about 25 cases): single pass, incremental passes, a bad line, health rows, missing setting, missing file, bad interval, `--follow` picking up new lines and stopping on interrupt, repeated failures reported once with an error health row, connection cleanup, and the config setting. **Not run anywhere.** Likely weak spots: the tests monkeypatch `cli._sleep` and `runner.drain`.
+- **Docs:** README (setting, command table), PROGRESS.md (stage 4 row, what has not been run, ingest gaps).
+- **Not changed:** the ingest library, schema, design documents. The batch-retry question for the owner is still open. Nothing run on the Mac or the server; nothing installed or changed outside this folder.
 
 ### 2026-11-08T12:01Z: Unlogged ingest code found and tested; ingest stall fixed; docs brought up to date
 - **Found unlogged work, read before anything was changed:** `guard/ingest/` (`parser.py`, `normalize.py`, `tailer.py`, `writer.py`, `runner.py`) and `tests/test_ingest_{normalize,parser,tailer,writer}.py` plus `tests/ingest_helpers.py`. The files were written at about 11:40Z, after the last log entry, and are in no document. `PROGRESS.md` said Stage 4 was not started. The parser's field names match the `guard_json` format in ARCHITECTURE.md section 9 exactly.

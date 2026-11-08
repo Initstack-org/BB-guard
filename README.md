@@ -37,8 +37,8 @@ Dashboard pages (sign in with an administrator created from the command line):
 | Audit Log | `/audit` | Filter and page through audit events |
 | General Settings | `/settings` | Edit typed, validated settings. Only the `auth.*` settings affect running code so far |
 
-The other ten sidebar items are shown greyed out. Ingest (`guard/ingest/`) is a tested library only:
-nothing starts it yet.
+The other ten sidebar items are shown greyed out. Ingest (`guard/ingest/`) can be run by hand with
+`python -m guard ingest` (see the command table); nothing starts it automatically yet.
 
 ## Layout
 
@@ -100,6 +100,11 @@ GUARD_DASHBOARD_BIND=127.0.0.1:8787
 GUARD_INTERNAL_BIND=127.0.0.1:8788
 GUARD_EXPORT_DIR=
 GUARD_BACKUP_DIR=
+# Nginx JSON access log read by `ingest` (absolute path; the design uses the path below)
+GUARD_ACCESS_LOG=/var/log/nginx/guard/access.jsonl
+# Optional: let the tunnel connector reach the dashboard directly (see "Behind a Cloudflare tunnel")
+# GUARD_DASHBOARD_ALLOW_LAN=1
+# GUARD_DASHBOARD_BIND=192.168.1.50:8787
 ```
 
 `secrets.env` (keep it out of git; restrict its permissions, e.g. `chmod 600`):
@@ -133,14 +138,46 @@ python -m guard --env guard.env --secrets secrets.env <command>
 | `create-admin USERNAME [--display-name NAME]` | Creates an administrator (this is how the first one is made; there is no public registration) |
 | `reset-password USERNAME` | Sets a new password and revokes that admin's sessions |
 | `list-admins` | Lists administrators |
+| `ingest [--follow] [--interval N]` | Reads new lines from `GUARD_ACCESS_LOG` into the database. One pass by default; `--follow` repeats every N seconds (default 5) until Ctrl-C. Records an `ingest` health heartbeat. Needs `migrate` first. Never run against a real Nginx log yet |
 | `serve` | Runs the dashboard on `GUARD_DASHBOARD_BIND`. Refuses to start while migrations are pending. Never run on a real machine yet |
 
 Passwords are typed at a terminal prompt only. They are never taken from arguments, the
 environment, or a pipe. Run `migrate` before any other command that touches the database.
 
+## Behind a Cloudflare tunnel (no Nginx in front of the dashboard)
+
+The browser talks HTTPS to Cloudflare; `cloudflared` can then talk plain HTTP to Guard. Guard's
+`Secure` cookies and `https://` origin refer to what the browser sees, so this works. Settings:
+
+```
+GUARD_EXTERNAL_ORIGIN=https://guard.initstack.org
+GUARD_TRUSTED_CONNECTORS=192.168.1.148
+GUARD_DASHBOARD_ALLOW_LAN=1
+GUARD_DASHBOARD_BIND=<this machine's private address>:8787
+```
+
+and point the tunnel's ingress for `guard.initstack.org` at `http://<that address>:8787`.
+Cloudflared passes the public hostname as `Host`, which the host check requires.
+
+What Guard does in this mode:
+
+- Only a **specific private IP address** is accepted for the bind (never `0.0.0.0`, never a public
+  address or a name), and `GUARD_TRUSTED_CONNECTORS` must be set. The internal listener can never be
+  on the LAN.
+- **Only loopback and the trusted connectors can connect.** Any other machine on the LAN gets a bare
+  `403` before the login page. This is enforced by Guard itself, so it does not depend on a firewall
+  (a firewall rule limiting the port to the connector is still sensible).
+- When the connection really comes from a trusted connector, Guard uses its `CF-Connecting-IP`
+  header as the client address, so the sign-in throttle and the audit log see each visitor's own
+  address instead of lumping everyone together as the connector. A missing or malformed header falls
+  back to the connector's address. `X-Forwarded-For` and every other header are ignored, and
+  `CF-Connecting-IP` is ignored from every other peer.
+- The traffic between the connector and Guard is plain HTTP on your LAN. Anyone who can sniff that
+  segment can read sign-in forms. Keep it on a trusted network.
+
 ## Not built yet
 
-Passkeys; wiring ingest to the CLI and the service; Visitors, IP Intelligence and URL History pages,
+Passkeys; running ingest inside the service; Visitors, IP Intelligence and URL History pages,
 graphs and CSV export; IP intelligence and moderation; URL rules and enforcement; the block page;
 the MyBB plugin and injections; the internal listener Nginx calls; Backups and Retention and API
 Settings pages; install, upgrade, backup, restore, rollback and uninstall scripts and the Nginx and

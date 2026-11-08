@@ -79,16 +79,37 @@ _templates = Environment(
 # Request helpers
 
 
+def _peer_ip(request: Request) -> str:
+    return request.client.host if request.client else ""
+
+
+def trusted_ip_set(connectors) -> frozenset:
+    """Canonical text of the configured tunnel-connector addresses (unparseable entries are dropped, so
+    an unparseable peer address can never match one)."""
+    return frozenset(c for c in (service.canonical_ip(x) for x in connectors) if c != "invalid")
+
+
 def client_ip(request: Request) -> str:
-    """The real client address (docs/ARCHITECTURE.md section 8): X-Guard-Client-Ip is honoured only
-    when the TCP peer is loopback (the Nginx vhost). X-Forwarded-For and CF-Connecting-IP are never read."""
-    peer = request.client.host if request.client else ""
+    """The real client address (docs/ARCHITECTURE.md section 8).
+
+    Only two sources of a forwarded address are ever honoured, each only from its own kind of peer:
+    - X-Guard-Client-Ip, when the TCP peer is loopback (an Nginx vhost on the same machine);
+    - CF-Connecting-IP, when the TCP peer is one of the configured trusted connectors (cloudflared
+      connecting straight to Guard).
+    A missing or malformed header falls back to the peer's own address. X-Forwarded-For and every other
+    header are never read, and neither header is read from any other peer.
+    """
+    peer = _peer_ip(request)
     try:
         peer_is_loopback = ipaddress.ip_address(peer).is_loopback
     except ValueError:
         peer_is_loopback = False
     if peer_is_loopback:
         header = request.headers.get("x-guard-client-ip", "").strip()
+        if header and service.canonical_ip(header) != "invalid":
+            return service.canonical_ip(header)
+    elif service.canonical_ip(peer) in getattr(request.app.state, "trusted_ips", frozenset()):
+        header = request.headers.get("cf-connecting-ip", "").strip()
         if header and service.canonical_ip(header) != "invalid":
             return service.canonical_ip(header)
     return service.canonical_ip(peer)
@@ -657,15 +678,36 @@ def settings_reset(ctx: Ctx) -> Response:
 
 
 class SecurityMiddleware:
-    """Host check (421 for any other Host) and the headers every response carries (docs/API.md section 1)."""
+    """Connection gate, host check (421 for any other Host) and the headers every response carries.
 
-    def __init__(self, app, hostname: str):
+    When the dashboard listens on the LAN (`allowed_peers` is given), only loopback and the trusted
+    connectors may connect at all; everyone else gets a bare 403 before any page logic runs, so a
+    neighbour on the LAN cannot even reach the login form.
+    """
+
+    def __init__(self, app, hostname: str, allowed_peers: frozenset | None = None):
         self.app = app
         self.hostname = hostname.lower()
+        self.allowed_peers = allowed_peers
+
+    def _peer_allowed(self, scope) -> bool:
+        if self.allowed_peers is None:
+            return True
+        client = scope.get("client")
+        peer = service.canonical_ip(client[0]) if client else "invalid"
+        try:
+            if ipaddress.ip_address(client[0]).is_loopback:
+                return True
+        except (ValueError, TypeError, IndexError):
+            return False
+        return peer in self.allowed_peers
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             await self.app(scope, receive, send)
+            return
+        if not self._peer_allowed(scope):
+            await PlainTextResponse("Forbidden", status_code=403)(scope, receive, send)
             return
         path = scope.get("path", "")
 
@@ -725,12 +767,14 @@ def create_app(cfg: Config, *, hasher=None, clock: Callable[[], int] = db.now_ms
     app.state.clock = clock
     app.state.reauth = sessions.ReauthTracker()
     app.state.route_classes = table.classes
+    app.state.trusted_ips = trusted_ip_set(cfg.trusted_connectors)
     return _wrap(app, cfg)
 
 
 def _wrap(app: Starlette, cfg: Config):
     """Wrap with the middleware but keep `.state` and `.routes` reachable for tests and the sweep."""
-    wrapped = SecurityMiddleware(app, cfg.rp_id)
+    gate = app.state.trusted_ips if cfg.dashboard_on_lan else None
+    wrapped = SecurityMiddleware(app, cfg.rp_id, gate)
     wrapped.state = app.state
     wrapped.routes = app.routes
     return wrapped

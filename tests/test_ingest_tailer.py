@@ -6,7 +6,7 @@ import pytest
 
 from guard.ingest import runner, tailer
 from guard.ingest.writer import Position, load_position
-from ingest_helpers import TRUSTED, log_line, write_log
+from ingest_helpers import TRUSTED, log_dict, log_line, write_log
 
 
 @pytest.fixture
@@ -214,3 +214,18 @@ def test_health_heartbeat(conn):
     assert tuple(row) == ("error", 1000, 2000, 300)
     runner.record_health(conn, ok=True, now_ms=3000)
     assert conn.execute("SELECT state, last_ok_ms FROM component_health").fetchone()[0] == "ok"
+
+
+# ---- hostile bytes --------------------------------------------------------------------------------
+
+def test_a_hostile_user_agent_neither_hides_the_request_nor_stalls_ingestion(conn, log):
+    def line(i, ua):
+        return json.dumps(log_dict(i, ua="@@"), ensure_ascii=False).encode().replace(b"@@", ua) + b"\n"
+    with open(log, "wb") as fh:
+        fh.write(line(0, b"A\xed\xa0\x80B"))   # encoded surrogate: used to crash the database write
+        fh.write(line(1, b"A\xffB"))             # invalid byte: used to hide the request
+    write_log(log, 1, start=5)
+    result = drain(conn, log)
+    assert (result.written, result.bad_lines) == (3, 0)
+    assert load_position(conn).offset == os.path.getsize(log)
+    assert drain(conn, log).idle

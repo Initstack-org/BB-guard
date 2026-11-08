@@ -37,7 +37,10 @@ _SECRETISH_RUN = re.compile(r"[A-Za-z0-9+/=_\-]{32,}")
 _SENSITIVE_PAIR = re.compile(
     r"(?i)([A-Za-z0-9_.\-]*(?:" + "|".join(SENSITIVE_KEY_PARTS) + r")[A-Za-z0-9_.\-]*)=[^&\s\"',;]*")
 
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+# Control characters and lone surrogates. A surrogate cannot be encoded as UTF-8, so SQLite refuses to
+# store it; json.loads() can produce one from a "\ud800" escape.
+_SURROGATE = re.compile(r"[\ud800-\udfff]")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f\ud800-\udfff]")
 
 
 def _looks_secret(text: str) -> bool:
@@ -46,7 +49,7 @@ def _looks_secret(text: str) -> bool:
 
 
 def strip_control(text: str) -> str:
-    """Replace control characters (including NUL, CR and LF) with U+FFFD."""
+    """Replace control characters (including NUL, CR and LF) and lone surrogates with U+FFFD."""
     return _CONTROL.sub("\ufffd", text)
 
 
@@ -144,7 +147,7 @@ def redact_query(raw_query: str) -> str | None:
 
 def normalize_uri(raw_uri: str) -> NormalizedUri:
     """Split a raw request URI into a normalized path and a redacted query."""
-    uri = raw_uri.split("#", 1)[0]
+    uri = _SURROGATE.sub("\ufffd", raw_uri).split("#", 1)[0]  # unquote_to_bytes cannot take a surrogate
     if "://" in uri.split("?", 1)[0]:  # absolute-form request target: keep only the path and query
         rest = uri.split("://", 1)[1]
         slash = rest.find("/")

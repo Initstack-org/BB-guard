@@ -2,7 +2,7 @@
 
     python -m guard.cli [--env FILE] [--secrets FILE] <command>
 
-Commands: doctor, migrate, create-admin, reset-password, list-admins, serve.
+Commands: doctor, migrate, create-admin, reset-password, list-admins, ingest, serve.
 Passwords are read with a no-echo prompt only: never from argv, the environment or a pipe.
 """
 
@@ -12,6 +12,7 @@ import argparse
 import getpass
 import os
 import sys
+import time
 from typing import Callable
 
 from . import db
@@ -107,6 +108,75 @@ def cmd_list_admins(args, out, **_) -> int:
     return 0
 
 
+def cmd_ingest(args, out, **_) -> int:
+    """Read new lines from the Nginx JSON spool file into the database (docs/SUBSYSTEMS.md section 2).
+
+    One pass by default (catches up, prints a summary, exits). With --follow it keeps going until
+    interrupted, which is what a systemd unit would run until ingest is built into the service.
+    """
+    from .ingest import runner  # noqa: PLC0415
+    cfg, conn = _open(args)
+    if not cfg.access_log:
+        out("error: GUARD_ACCESS_LOG is not set (the Nginx JSON access log to read)")
+        return 1
+    version = db.current_version(conn)
+    if version != len(db.load_migrations()):
+        out(f"error: database schema is at version {version}; run the migrate command first")
+        return 1
+    if args.interval < 1 or args.interval > 3600:
+        out("error: --interval must be between 1 and 3600 seconds")
+        return 1
+
+    def summary(res) -> str:
+        return (f"lines={res.lines} written={res.written} duplicates={res.duplicates} "
+                f"bad_lines={res.bad_lines} peer_mismatches={res.peer_mismatches} gaps={res.gaps}")
+
+    def one_pass():
+        """Returns (result, None) or (None, error text). Health is recorded either way."""
+        try:
+            res = runner.drain(conn, cfg.access_log, cfg.trusted_connectors)
+            runner.record_health(conn, ok=True)
+            return res, None
+        except (db.sqlite3.Error, OSError) as exc:
+            text = f"{type(exc).__name__}: {exc}"
+            try:
+                runner.record_health(conn, ok=False, error=text)
+            except db.sqlite3.Error:
+                pass  # the database itself is the problem; the error is still reported below
+            return None, text
+
+    if not args.follow:
+        if not os.path.isfile(cfg.access_log):
+            out(f"error: ingest failed: {cfg.access_log} does not exist or is not a file")
+            return 1
+        res, err = one_pass()
+        if err:
+            out(f"error: ingest failed: {err}")
+            return 1
+        out("ingest: " + summary(res))
+        return 0
+
+    out(f"ingest: following {cfg.access_log} every {args.interval}s (Ctrl-C to stop)")
+    if not os.path.isfile(cfg.access_log):
+        out("warning: the log file does not exist yet; waiting for it")
+    last_error = None
+    try:
+        while True:
+            res, err = one_pass()
+            if err and err != last_error:
+                out(f"error: ingest failed: {err} (will retry)")
+            elif res is not None and not res.idle:
+                out("ingest: " + summary(res))
+            last_error = err
+            _sleep(args.interval)
+    except KeyboardInterrupt:
+        out("ingest: stopped")
+    return 0
+
+
+_sleep = time.sleep  # tests replace this
+
+
 def cmd_serve(args, out, **_) -> int:
     """Run the dashboard listener (Stage 2 web layer). The internal listener comes in Stage 6."""
     try:
@@ -127,6 +197,9 @@ def cmd_serve(args, out, **_) -> int:
     app = create_app(cfg)  # raises MissingDependency when argon2-cffi is not installed
     host, port = cfg.dashboard_bind
     out(f"dashboard listening on {host}:{port} (origin {cfg.external_origin})")
+    if cfg.dashboard_on_lan:
+        out(f"note: LAN listener. Only loopback and these trusted connectors may connect: "
+            f"{', '.join(cfg.trusted_connectors)}. Their CF-Connecting-IP header is used as the client address.")
     # No proxy header handling and no access log: client IP rules live in guard.web.app.client_ip,
     # and request lines are not logged (docs/ARCHITECTURE.md section 8, GOAL.md rule 12).
     uvicorn.run(app, host=host, port=port, proxy_headers=False, server_header=False, access_log=False)
@@ -148,6 +221,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("username")
     p.set_defaults(func=cmd_reset_password)
     sub.add_parser("list-admins").set_defaults(func=cmd_list_admins)
+    p = sub.add_parser("ingest", help="read the Nginx JSON access log into the database")
+    p.add_argument("--follow", action="store_true", help="keep running instead of one pass")
+    p.add_argument("--interval", type=int, default=5, help="seconds between passes with --follow (default 5)")
+    p.set_defaults(func=cmd_ingest)
     sub.add_parser("serve").set_defaults(func=cmd_serve)
     return parser
 
