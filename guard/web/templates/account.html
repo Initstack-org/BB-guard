@@ -36,9 +36,57 @@
       {% endif %}
     </section>
 
-    <section class="panel">
+    <section class="panel" id="passkeys" data-csrf-token="{{ csrf_token }}">
       <h2>Passkeys</h2>
-      <p class="muted">Passkey registration is not available yet. Until it is, your password is your only way to sign in, so keep it safe. If you are ever locked out, an operator can reset it with <code>guard-admin reset-password</code>.</p>
+      {% if not passkeys_available %}
+      <p class="muted">Passkeys are not available on this server yet: the <code>webauthn</code> package is not installed. Until it is, your password is your only way to sign in, so keep it safe. If you are ever locked out, an operator can reset it with <code>guard-admin reset-password</code>.</p>
+      {% else %}
+      <p class="muted">A passkey lets you sign in with your fingerprint, face, screen lock or a security key instead of a password. Adding or removing one needs your password or a passkey confirmed within the last {{ window_label }}; it is {% if reauth_recent %}confirmed right now{% else %}not confirmed right now{% endif %}.</p>
+      {% if passkeys %}
+      <div class="scroll">
+        <table class="table">
+          <thead><tr><th>Name</th><th>Added</th><th>Last used</th><th>Type</th><th></th></tr></thead>
+          <tbody>
+          {% for p in passkeys %}
+            <tr>
+              <td>
+                <form method="post" action="/api/v1/passkeys/rename" class="inline-form">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="passkey_id" value="{{ p.id }}">
+                  <input name="name" value="{{ p.name }}" maxlength="64" required aria-label="Name of passkey {{ p.name }}">
+                  <button type="submit" class="secondary">Rename</button>
+                </form>
+              </td>
+              <td>{{ p.added }}</td>
+              <td>{{ p.last_used }}</td>
+              <td>{{ p.kind }}{% if p.transports %}<br><span class="muted">{{ p.transports }}</span>{% endif %}</td>
+              <td>
+                <form method="post" action="/api/v1/passkeys/revoke" class="inline-form">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="passkey_id" value="{{ p.id }}">
+                  <button type="submit" class="secondary danger">Remove</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p>You have no passkeys yet.</p>
+      {% endif %}
+      <form id="passkey-add" method="get" action="/account" hidden>
+        <label>Name for the new passkey <input name="name" maxlength="64" required placeholder="For example: Work laptop" autocomplete="off"></label>
+        <button type="submit">Add a passkey</button>
+      </form>
+      {% if passkeys %}
+      <p><button type="button" id="passkey-reauth" class="secondary" hidden>Confirm with a passkey</button></p>
+      {% endif %}
+      <p id="passkey-unsupported" class="muted" hidden>This browser does not support passkeys.</p>
+      <noscript><p class="muted">Adding a passkey needs JavaScript.</p></noscript>
+      <p id="passkey-status" class="notice" role="status" hidden></p>
+      <p id="passkey-error" class="error" role="alert" hidden></p>
+      {% endif %}
     </section>
 
     <section class="panel">
@@ -78,4 +126,7 @@
       </form>
       {% endif %}
     </section>
+    {% if passkeys_available %}
+    <script src="/static/passkeys.js" defer></script>
+    {% endif %}
 {% endblock %}

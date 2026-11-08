@@ -30,7 +30,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from .. import audit, db
-from ..auth import csrf, service, sessions
+from ..auth import csrf, passkeys, service, sessions, throttle
 from ..config import Config
 from . import audit_log
 from . import admins as admins_mod
@@ -54,7 +54,10 @@ PAGE_CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 's
             "frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 
 # Class P routes that may exist (docs/API.md section 4). The sweep test fails on anything else.
-PUBLIC_ALLOW_LIST = frozenset({"/login", "/login/password", "/healthz", "/static"})
+PUBLIC_ALLOW_LIST = frozenset({"/login", "/login/password", "/login/passkey/options",
+                               "/login/passkey/verify", "/healthz", "/static"})
+
+PASSKEYS_UNAVAILABLE = "Passkeys are not available on this server."
 
 # Sidebar from GOAL.md section 1.A. Pages marked built=False are listed but not links yet.
 NAV = [
@@ -186,7 +189,10 @@ class BodyTooLarge(Exception):
     pass
 
 
-async def _read_form(request: Request) -> dict:
+async def _read_form(request: Request, json_body: bool = False) -> dict:
+    """The request body as a dict: an urlencoded form, or (only for routes registered with json_body) a JSON
+    object sent as application/json. Anything else, or anything malformed, is an empty dict, which the
+    handlers and the CSRF check then reject."""
     total = 0
     chunks = []
     async for chunk in request.stream():
@@ -195,6 +201,14 @@ async def _read_form(request: Request) -> dict:
             raise BodyTooLarge
         chunks.append(chunk)
     ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if json_body:
+        if ctype != "application/json":
+            return {}
+        try:
+            data = json.loads(b"".join(chunks).decode("utf-8"))
+        except (ValueError, RecursionError):
+            return {}
+        return data if isinstance(data, dict) else {}
     if ctype != "application/x-www-form-urlencoded":
         return {}
     try:
@@ -212,7 +226,7 @@ def _csrf_checks(ctx: Ctx) -> Response | None:
         reason = "origin"
     else:
         supplied = req.headers.get("x-csrf-token") or ctx.form.get("csrf_token")
-        if csrf.verify(ctx.csrf_token(), supplied):
+        if csrf.verify(ctx.csrf_token(), supplied if isinstance(supplied, str) else None):
             return None
         reason = "token"
     ctx.audit("auth.csrf_failure", "denied", detail={"reason": reason, "path": req.url.path[:200]})
@@ -254,7 +268,8 @@ class RouteTable:
     routes: list = field(default_factory=list)
     classes: dict = field(default_factory=dict)
 
-    def add(self, path: str, fn: Callable[[Ctx], Response], cls: str, methods=("GET",)) -> None:
+    def add(self, path: str, fn: Callable[[Ctx], Response], cls: str, methods=("GET",), *,
+            json_body: bool = False) -> None:
         if cls not in ("P", "A", "W", "R"):
             raise ValueError(f"unknown route class {cls!r} for {path}")
 
@@ -262,7 +277,7 @@ class RouteTable:
             form: dict = {}
             if request.method not in ("GET", "HEAD", "OPTIONS"):
                 try:
-                    form = await _read_form(request)
+                    form = await _read_form(request, json_body)
                 except BodyTooLarge:
                     return _error(request, 413, "too_large", "Request body too large")
             return await run_in_threadpool(_dispatch, cls, fn, request, form)
@@ -289,7 +304,8 @@ def _login_page(ctx: Ctx, pre: str, *, status: int = 200, error: str = "", new_c
                 headers: dict | None = None) -> Response:
     response = _render("login.html", status, headers,
                        csrf_token=csrf.pre_session_token(ctx.cfg.secret_key, pre),
-                       password_enabled=password_login_enabled(ctx.conn), error=error)
+                       password_enabled=password_login_enabled(ctx.conn), error=error,
+                       passkeys_available=ctx.state.webauthn.available())
     if new_cookie:
         response.set_cookie(PRE_COOKIE, pre, max_age=PRE_COOKIE_MAX_AGE_S, path="/", secure=True,
                             httponly=True, samesite="lax")
@@ -332,6 +348,75 @@ def login_password(ctx: Ctx) -> Response:
         return _login_page(ctx, pre, status=401, error="Invalid username or password.")
     ctx.state.reauth.mark(result.session.id, ctx.now_ms)
     response = RedirectResponse("/", status_code=303)
+    _set_session_cookie(response, result.token, ctx.limits.max_s)
+    _clear_cookie(response, PRE_COOKIE)
+    return response
+
+
+def _json_error(status: int, code: str, message: str, headers: dict | None = None) -> JSONResponse:
+    return JSONResponse({"error": {"code": code, "message": message}}, status_code=status, headers=headers)
+
+
+def _pre_session_ok(ctx: Ctx, path: str) -> str | None:
+    """The sign-in routes' CSRF rule (docs/API.md section 4): the pre-session cookie must be present and the
+    token derived from it must be supplied (header `X-CSRF-Token` or a `csrf_token` field), and the Origin
+    must match. Returns the pre-session value, or None after auditing the failure."""
+    req = ctx.request
+    pre = req.cookies.get(PRE_COOKIE)
+    origin_good = csrf.origin_ok(ctx.cfg.external_origin, req.headers.get("origin"),
+                                 req.headers.get("referer"))
+    supplied = req.headers.get("x-csrf-token") or ctx.form.get("csrf_token")
+    token_good = (_valid_pre_cookie(pre) and isinstance(supplied, str) and csrf.verify(
+        csrf.pre_session_token(ctx.cfg.secret_key, pre), supplied))
+    if origin_good and token_good:
+        return pre
+    audit.record(ctx.conn, "auth.csrf_failure", "denied", ip=ctx.ip, ts_ms=ctx.now_ms,
+                 detail={"reason": "origin" if not origin_good else "token", "path": path})
+    return None
+
+
+def login_passkey_options(ctx: Ctx) -> Response:
+    pre = _pre_session_ok(ctx, "/login/passkey/options")
+    if pre is None:
+        return _json_error(403, "csrf_failed", "Forbidden")
+    if not ctx.state.webauthn.available():
+        return _json_error(503, "unavailable", PASSKEYS_UNAVAILABLE)
+    wait = throttle.check(ctx.conn, throttle.ip_key(ctx.ip), ctx.now_ms)
+    if wait:
+        return _json_error(429, "rate_limited", "Too many attempts. Try again later.",
+                           {"Retry-After": str(wait)})
+    try:
+        options = passkeys.begin_signin(ctx.state.webauthn, ctx.state.challenges, rp_id=ctx.cfg.rp_id,
+                                        binding=pre, now_ms=ctx.now_ms)
+    except passkeys.PasskeyUnavailable:
+        return _json_error(503, "unavailable", PASSKEYS_UNAVAILABLE)
+    return JSONResponse({"data": options})
+
+
+def login_passkey_verify(ctx: Ctx) -> Response:
+    pre = _pre_session_ok(ctx, "/login/passkey/verify")
+    if pre is None:
+        return _json_error(403, "csrf_failed", "Forbidden")
+    if not ctx.state.webauthn.available():
+        return _json_error(503, "unavailable", PASSKEYS_UNAVAILABLE)
+    credential = ctx.form.get("credential")
+    if not isinstance(credential, dict):
+        return _json_error(400, "bad_request", "The passkey response is missing.")
+    try:
+        result = passkeys.finish_signin(
+            ctx.state.webauthn, ctx.state.challenges, ctx.conn, binding=pre, credential=credential,
+            rp_id=ctx.cfg.rp_id, origin=ctx.cfg.external_origin, ip=ctx.ip,
+            user_agent=ctx.request.headers.get("user-agent", ""), now_ms=ctx.now_ms,
+            policy=ctx.limits.throttle, session_max_s=ctx.limits.max_s)
+    except passkeys.PasskeyUnavailable:
+        return _json_error(503, "unavailable", PASSKEYS_UNAVAILABLE)
+    if result.locked:
+        return _json_error(429, "rate_limited", "Too many attempts. Try again later.",
+                           {"Retry-After": str(result.retry_after_s)})
+    if not result.ok:
+        return _json_error(401, "invalid", "Passkey sign-in failed.")
+    ctx.state.reauth.mark(result.session.id, ctx.now_ms)
+    response = JSONResponse({"data": {"redirect": "/"}})
     _set_session_cookie(response, result.token, ctx.limits.max_s)
     _clear_cookie(response, PRE_COOKIE)
     return response
@@ -392,8 +477,12 @@ def healthz(ctx: Ctx) -> Response:
 FLASH = {
     "password_changed": "Password changed. Your other sessions were signed out.",
     "reauth_ok": "Password confirmed.",
+    "reauth_passkey_ok": "Passkey confirmed.",
     "session_revoked": "Session signed out.",
     "sessions_revoked": "Your other sessions were signed out.",
+    "passkey_added": "Passkey added.",
+    "passkey_renamed": "Passkey renamed.",
+    "passkey_revoked": "Passkey removed.",
 }
 
 
@@ -427,7 +516,16 @@ def _account_page(ctx: Ctx, *, status: int = 200, error: str = "", message: str 
                                                             ctx.limits.reauth_s),
                    window_label=_window_label(ctx.limits.reauth_s), timezone_name=tz,
                    password_enabled=password_login_enabled(ctx.conn),
-                   min_length=ctx.limits.min_password_length)
+                   min_length=ctx.limits.min_password_length,
+                   passkeys=_passkey_rows(ctx, tz), passkeys_available=ctx.state.webauthn.available())
+
+
+def _passkey_rows(ctx: Ctx, tz: str) -> list:
+    return [{"id": p["id"], "name": p["name"], "added": _format_ms(p["created_ms"], tz),
+             "last_used": _format_ms(p["last_used_ms"], tz) if p["last_used_ms"] else "Never",
+             "kind": {None: "", True: "Synced passkey", False: "Device-bound"}[p["synced"]],
+             "transports": ", ".join(p["transports"]), "cred_hash": p["cred_hash"]}
+            for p in passkeys.list_for_admin(ctx.conn, ctx.admin["id"])]
 
 
 def _password_field(ctx: Ctx, name: str) -> str:
@@ -499,6 +597,135 @@ def sessions_revoke_others(ctx: Ctx) -> Response:
                                               except_id=ctx.session.id)
         ctx.audit("session.revoke_others", "success", detail={"count": count})
     return RedirectResponse("/account?msg=sessions_revoked", status_code=303)
+
+
+# ---------------------------------------------------------------------------------------------
+# Passkeys on the account page (docs/API.md section 5). The browser steps (navigator.credentials) run in
+# /static/passkeys.js and talk to the JSON routes below; the rename and remove buttons are plain form
+# posts like the rest of the page. Deviations from API.md, for the owner to confirm: rename and remove take
+# `passkey_id` in the form, not the path, and answer with a redirect or the re-rendered page.
+
+
+def _passkey_json_failure(exc: Exception) -> JSONResponse:
+    if isinstance(exc, passkeys.PasskeyNotFound):
+        return _json_error(404, "not_found", _sentence(str(exc)))
+    if isinstance(exc, passkeys.PasskeyConflict):
+        return _json_error(409, "conflict", _sentence(str(exc)))
+    return _json_error(400, "invalid", _sentence(str(exc)))
+
+
+def _need_passkeys(ctx: Ctx) -> Response | None:
+    return None if ctx.state.webauthn.available() else _json_error(503, "unavailable", PASSKEYS_UNAVAILABLE)
+
+
+def passkey_register_options(ctx: Ctx) -> Response:
+    if (unavailable := _need_passkeys(ctx)) is not None:
+        return unavailable
+    name = ctx.form.get("name")
+    try:
+        options = passkeys.begin_registration(
+            ctx.state.webauthn, ctx.state.challenges, ctx.conn, ctx.admin["id"], rp_id=ctx.cfg.rp_id,
+            binding=str(ctx.session.id), now_ms=ctx.now_ms, name=name if isinstance(name, str) else None)
+    except passkeys.PasskeyUnavailable:
+        return _json_error(503, "unavailable", PASSKEYS_UNAVAILABLE)
+    except service.AccountError as exc:
+        return _passkey_json_failure(exc)
+    return JSONResponse({"data": options})
+
+
+def passkey_register_verify(ctx: Ctx) -> Response:
+    if (unavailable := _need_passkeys(ctx)) is not None:
+        return unavailable
+    credential = ctx.form.get("credential")
+    if not isinstance(credential, dict):
+        return _json_error(400, "bad_request", "The passkey response is missing.")
+    try:
+        created = passkeys.finish_registration(
+            ctx.state.webauthn, ctx.state.challenges, ctx.conn, admin_id=ctx.admin["id"],
+            actor_name=ctx.admin["username"], binding=str(ctx.session.id), credential=credential,
+            name=ctx.form.get("name"), rp_id=ctx.cfg.rp_id, origin=ctx.cfg.external_origin, ip=ctx.ip,
+            now_ms=ctx.now_ms)
+    except passkeys.PasskeyUnavailable:
+        return _json_error(503, "unavailable", PASSKEYS_UNAVAILABLE)
+    except passkeys.PasskeyError:
+        return _json_error(400, "verification_failed", "That passkey could not be verified. Try again.")
+    except service.AccountError as exc:
+        return _passkey_json_failure(exc)
+    return JSONResponse({"data": created})
+
+
+def reauth_passkey_options(ctx: Ctx) -> Response:
+    if (unavailable := _need_passkeys(ctx)) is not None:
+        return unavailable
+    try:
+        options = passkeys.begin_reauth(ctx.state.webauthn, ctx.state.challenges, ctx.conn, ctx.admin["id"],
+                                        rp_id=ctx.cfg.rp_id, binding=str(ctx.session.id), now_ms=ctx.now_ms)
+    except passkeys.PasskeyUnavailable:
+        return _json_error(503, "unavailable", PASSKEYS_UNAVAILABLE)
+    except service.AccountError as exc:
+        return _passkey_json_failure(exc)
+    return JSONResponse({"data": options})
+
+
+def reauth_passkey_verify(ctx: Ctx) -> Response:
+    if (unavailable := _need_passkeys(ctx)) is not None:
+        return unavailable
+    credential = ctx.form.get("credential")
+    if not isinstance(credential, dict):
+        return _json_error(400, "bad_request", "The passkey response is missing.")
+    try:
+        check = passkeys.finish_reauth(
+            ctx.state.webauthn, ctx.state.challenges, ctx.conn, ctx.admin["id"], binding=str(ctx.session.id),
+            credential=credential, rp_id=ctx.cfg.rp_id, origin=ctx.cfg.external_origin, ip=ctx.ip,
+            now_ms=ctx.now_ms, policy=ctx.limits.throttle)
+    except passkeys.PasskeyUnavailable:
+        return _json_error(503, "unavailable", PASSKEYS_UNAVAILABLE)
+    if check.locked:
+        return _json_error(429, "rate_limited", "Too many attempts. Try again later.",
+                           {"Retry-After": str(check.retry_after_s)})
+    if not check.ok:
+        return _json_error(403, "invalid", "The passkey could not be confirmed.")
+    ctx.state.reauth.mark(ctx.session.id, ctx.now_ms)
+    return JSONResponse({"data": {"ok": True}})
+
+
+def _form_passkey_id(ctx: Ctx) -> int | None:
+    try:
+        return int(ctx.form.get("passkey_id", "")[:20])
+    except ValueError:
+        return None
+
+
+def _passkey_form_failure(ctx: Ctx, exc: service.AccountError) -> Response:
+    status = 404 if isinstance(exc, passkeys.PasskeyNotFound) else 409 if isinstance(
+        exc, passkeys.PasskeyConflict) else 400
+    return _account_page(ctx, status=status, error=_sentence(str(exc)))
+
+
+def passkey_rename(ctx: Ctx) -> Response:
+    passkey_id = _form_passkey_id(ctx)
+    if passkey_id is None:
+        return _account_page(ctx, status=400, error="Choose a passkey.")
+    try:
+        passkeys.rename(ctx.conn, ctx.admin["id"], passkey_id, ctx.form.get("name", "")[:200],
+                        actor_name=ctx.admin["username"], ip=ctx.ip, now_ms=ctx.now_ms)
+    except service.AccountError as exc:
+        return _passkey_form_failure(ctx, exc)
+    return RedirectResponse("/account?msg=passkey_renamed", status_code=303)
+
+
+def passkey_revoke(ctx: Ctx) -> Response:
+    passkey_id = _form_passkey_id(ctx)
+    if passkey_id is None:
+        return _account_page(ctx, status=400, error="Choose a passkey.")
+    try:
+        passkeys.revoke(ctx.conn, ctx.admin["id"], passkey_id, actor_name=ctx.admin["username"], ip=ctx.ip,
+                        now_ms=ctx.now_ms,
+                        password_usable=passkeys.password_usable(ctx.conn, ctx.admin["id"],
+                                                                 password_login_enabled(ctx.conn)))
+    except service.AccountError as exc:
+        return _passkey_form_failure(ctx, exc)
+    return RedirectResponse("/account?msg=passkey_revoked", status_code=303)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -995,13 +1222,16 @@ class SecurityMiddleware:
 
 
 def create_app(cfg: Config, *, hasher=None, clock: Callable[[], int] = db.now_ms,
-               extra_routes: Callable[[RouteTable], None] | None = None) -> Starlette:
+               extra_routes: Callable[[RouteTable], None] | None = None,
+               webauthn: passkeys.WebAuthnBackend | None = None) -> Starlette:
     if hasher is None:
         from ..auth.passwords import Argon2Hasher  # noqa: PLC0415
         hasher = Argon2Hasher()
     table = RouteTable()
     table.add("/login", login_get, "P")
     table.add("/login/password", login_password, "P", methods=("POST",))
+    table.add("/login/passkey/options", login_passkey_options, "P", methods=("POST",), json_body=True)
+    table.add("/login/passkey/verify", login_passkey_verify, "P", methods=("POST",), json_body=True)
     table.add("/healthz", healthz, "P")
     table.add("/logout", logout, "W", methods=("POST",))
     table.add("/", dashboard, "A")
@@ -1026,6 +1256,14 @@ def create_app(cfg: Config, *, hasher=None, clock: Callable[[], int] = db.now_ms
     table.add("/api/v1/reauth/password", reauth_password, "W", methods=("POST",))
     table.add("/api/v1/account/sessions/revoke", session_revoke, "W", methods=("POST",))
     table.add("/api/v1/account/sessions/revoke-others", sessions_revoke_others, "W", methods=("POST",))
+    table.add("/api/v1/reauth/passkey/options", reauth_passkey_options, "W", methods=("POST",), json_body=True)
+    table.add("/api/v1/reauth/passkey/verify", reauth_passkey_verify, "W", methods=("POST",), json_body=True)
+    table.add("/api/v1/passkeys/register/options", passkey_register_options, "R", methods=("POST",),
+              json_body=True)
+    table.add("/api/v1/passkeys/register/verify", passkey_register_verify, "R", methods=("POST",),
+              json_body=True)
+    table.add("/api/v1/passkeys/rename", passkey_rename, "W", methods=("POST",))
+    table.add("/api/v1/passkeys/revoke", passkey_revoke, "R", methods=("POST",))
     table.mount_static("/static", Path(__file__).parent / "static")
     if extra_routes is not None:
         extra_routes(table)
@@ -1035,6 +1273,8 @@ def create_app(cfg: Config, *, hasher=None, clock: Callable[[], int] = db.now_ms
     app.state.hasher = hasher
     app.state.clock = clock
     app.state.reauth = sessions.ReauthTracker()
+    app.state.webauthn = webauthn if webauthn is not None else passkeys.LibraryBackend()
+    app.state.challenges = passkeys.ChallengeStore()
     app.state.route_classes = table.classes
     app.state.trusted_ips = trusted_ip_set(cfg.trusted_connectors)
     return _wrap(app, cfg)

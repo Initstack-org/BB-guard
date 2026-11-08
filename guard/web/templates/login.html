@@ -5,6 +5,14 @@
 <main class="card login">
   <h1>InitStack Guard</h1>
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  {% if passkeys_available %}
+  <div id="passkey-signin" data-csrf-token="{{ csrf_token }}" hidden>
+    <button type="button" id="passkey-signin-button">Sign in with a passkey</button>
+    <p id="passkey-error" class="error" role="alert" hidden></p>
+  </div>
+  <p id="passkey-unsupported" class="muted" hidden>This browser does not support passkeys.</p>
+  {% if password_enabled %}<p class="divider" id="passkey-divider" hidden>or</p>{% endif %}
+  {% endif %}
   {% if password_enabled %}
   <form method="post" action="/login/password" autocomplete="on">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -15,6 +23,8 @@
   {% else %}
   <p>Password sign-in is turned off.</p>
   {% endif %}
-  <p class="muted">Passkey sign-in is not available yet.</p>
 </main>
+{% if passkeys_available %}
+<script src="/static/passkeys.js" defer></script>
+{% endif %}
 {% endblock %}
