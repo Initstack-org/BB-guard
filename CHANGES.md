@@ -5,13 +5,26 @@ All times are UTC (ISO 8601, `Z` suffix). Rule changed by the owner on 2026-11-0
 
 ## Status
 
-- **Last updated:** 2026-11-08T11:21Z
+- **Last updated:** 2026-11-08T12:01Z
+- **Latest (12:01Z):** found unlogged Stage 4 ingest code and the unlogged Administrators and General Settings pages' state; found and fixed an ingest stall (hostile bytes in a header); docs brought up to date. See the first log entry. The pages and ingest tests have not been run on the Mac.
 - **Current:** Stage 1 (architecture, schema, API plan) is fully written: `docs/ARCHITECTURE.md`, `docs/SUBSYSTEMS.md`, `docs/SCHEMA.md`, `docs/API.md`, plus `PROGRESS.md`. Waiting for the owner's review, which is the Stage 1 exit criterion.
-- **Stage 2:** the library layer (129 tests) and now a first web layer exist: sign-in, sign-out, health check, static files, dashboard shell, `serve` command (50 more tests). All tests passed in Claude's sandbox only; none have been run on the Mac. `guard-admin serve` has never been run.
-- **Audit Log page (11:21Z):** `/audit` page added (filters, keyset paging, 31 tests). First real run on the Mac: all 31 audit tests pass; full suite 286 passed, 2 failed, both fixed afterwards and not yet re-run (see the next log entry).
-- **Next:** (1) owner runs `pip install starlette jinja2 uvicorn argon2-cffi pytest` then `pytest` on the Mac, (2) owner reviews the Stage 1 documents, (3) Stage 3 passkeys, then the account page and re-authentication routes. The open questions at the end of each design doc and the server facts in `ARCHITECTURE.md` section 15 are still needed.
+- **Stage 2:** the library layer, the web layer (sign-in, sign-out, health, dashboard shell, `serve`), the account page, Audit Log, Administrators and General Settings pages exist. The Mac run (Python 3.9.6) is green for everything up to the Audit Log and account pages; Administrators and General Settings tests are written but not run. `guard serve` has never been run.
+- **Audit Log page (11:21Z):** `/audit` page added (filters, keyset paging, 31 tests). Passed on the Mac; the two failures in the first full run were fixed and a second run passed.
+- **Next:** (1) owner runs `pip install starlette jinja2 uvicorn argon2-cffi pytest` then `pytest` on the Mac and reports the result, (2) owner reviews the Stage 1 documents and answers the batch-retry question, (3) wire ingest into the CLI and service, then Visitors and URL History pages, (4) Stage 3 passkeys. The open questions at the end of each design doc and the server facts in `ARCHITECTURE.md` section 15 are still needed.
 
 ## Log
+
+### 2026-11-08T12:01Z: Unlogged ingest code found and tested; ingest stall fixed; docs brought up to date
+- **Found unlogged work, read before anything was changed:** `guard/ingest/` (`parser.py`, `normalize.py`, `tailer.py`, `writer.py`, `runner.py`) and `tests/test_ingest_{normalize,parser,tailer,writer}.py` plus `tests/ingest_helpers.py`. The files were written at about 11:40Z, after the last log entry, and are in no document. `PROGRESS.md` said Stage 4 was not started. The parser's field names match the `guard_json` format in ARCHITECTURE.md section 9 exactly.
+- **Ran** the ingest tests in Claude's sandbox: 142 passed (137 before the fix below, 5 added). The sandbox has no pytest and no network, so a small stand-in runner was used (scratch file, not kept in the project; it supports only fixtures, `parametrize`, `raises` and `tmp_path`). It was checked by breaking the code on purpose: 13 tests failed, and with the fix below reverted, 3 failed. Real `pytest` has not run these files.
+- **Bug found by reading the code, fixed:** Nginx `escape=json` passes bytes >= 0x80 through, and `json.loads(bytes)` decodes with `surrogatepass`. A User-Agent containing `ED A0 80` reached SQLite as a lone surrogate, `write_batch` raised `UnicodeEncodeError`, the batch rolled back and every later pass re-read it: ingest stalled for good, from one request. A User-Agent with an invalid byte (`FF`) made the parser reject the whole line, so that request was never recorded. A JSON-escaped `\ud800` in the URI also crashed `unquote_to_bytes`. Both reproduced in the sandbox first.
+  - `guard/ingest/parser.py`: the line is decoded with `errors="replace"` before `json.loads`.
+  - `guard/ingest/normalize.py`: `strip_control` also replaces lone surrogates; `normalize_uri` scrubs them before decoding.
+  - Tests added: 3 parametrized and 1 further case in `test_ingest_parser.py`, 1 end-to-end test in `test_ingest_tailer.py`.
+- **Docs:** rewrote `PROGRESS.md` (stage table, live pages, what has been run and where, deviations from the design docs, known gaps), updated `README.md`, and added an implementation-status note to `docs/API.md`.
+- **Not changed:** the design documents' content, the schema, anything on the server. Ingest is still not wired to the CLI or the service.
+- **Question for the owner:** retry a failing batch line by line and set the bad line aside, instead of retrying it unchanged forever? Not built; asked first.
+- Used the Mac's file tools in `~/Desktop/guard/` only; copied files to Claude's sandbox to run tests. Nothing installed or changed outside this folder.
 
 ### 2026-11-08: General Settings page added (untested)
 - **Added** `guard/web/settings_registry.py`: the full settings registry from SCHEMA.md section 6 (type, default, bounds, description per key) with typed parsing and validation, `set_value` and `reset_value` (transactional, audited as `settings.update` / `settings.reset` with old and new values), and the rules below. Added `templates/settings.html`, CSS, and handlers in `guard/web/app.py`: `GET /settings` (class A), `POST /api/v1/settings/set` and `/api/v1/settings/reset` (class R). General Settings is now a live sidebar link.

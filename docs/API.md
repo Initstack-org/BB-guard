@@ -1,8 +1,24 @@
 # InitStack Guard: Route Plan (API)
 
-> **Status:** Stage 1 draft v0.1, written 2026-11-08, awaiting owner review.
+> **Status:** Stage 1 draft v0.1, written 2026-11-08, awaiting owner review. Partly implemented since: see section 0.
 > **Source:** `GOAL.md`, [ARCHITECTURE.md](ARCHITECTURE.md), [SUBSYSTEMS.md](SUBSYSTEMS.md) and [SCHEMA.md](SCHEMA.md). `docs/SPEC.md` was not available; where it disagrees with this file, the spec wins.
-> **Nothing here is implemented.** This is a plan for review. Paths, field names and limits are proposals.
+> **The sections after section 0 are the plan, not a description of the code.** Paths, field names and limits are proposals.
+
+## 0. Implementation status (2026-11-08T12:01Z)
+
+Built, on Starlette rather than FastAPI (so `/docs`, `/redoc` and `/openapi.json` do not exist at all), with every route registered under one class (P, A, W or R) and a test sweep that fails on any route without one:
+
+| Route | Class | Differs from this plan |
+|---|---|---|
+| `GET /login`, `POST /login/password`, `GET /healthz`, `/static` | P | None. Passkey sign-in routes are not built |
+| `POST /logout` | W | Session row is marked revoked, not deleted |
+| `GET /` | A | Shell only |
+| `GET /account`, `POST /api/v1/account/password`, `POST /api/v1/reauth/password`, `POST /api/v1/account/sessions/revoke`, `POST /api/v1/account/sessions/revoke-others` | A / W | HTML form posts that redirect, not JSON. Password change is W, not R. Session revoke takes `session_id` in the form, not the path. Profile, passkey and passkey re-authentication routes not built |
+| `GET /admins`, `POST /api/v1/admins`, `/api/v1/admins/disable`, `/enable`, `/password` | A / R | Form posts; `admin_id` in the form, not the path. No JSON list, no display-name edit |
+| `GET /audit` | A | The page queries the database itself. `/api/v1/audit*` and the audit CSV export are not built |
+| `GET /settings`, `POST /api/v1/settings/set`, `/api/v1/settings/reset` | A / R | Every change is class R; key in the form; no JSON registry endpoint and no `expected_updated_ms` |
+
+Not built at all: the internal listener (section 3), sections 6 (except `/`), 7, 8 and 9, API Settings (10.3) and Backups and Retention (10.5). Which tests have been run, and where, is in `PROGRESS.md`.
 
 ## Contents
 1. Listeners and conventions
