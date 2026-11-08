@@ -1,33 +1,6 @@
-{% extends "base.html" %}
+{% extends "app_base.html" %}
 {% block title %}Dashboard - InitStack Guard{% endblock %}
-{% block body_class %}app{% endblock %}
-{% block body %}
-<aside class="sidebar" aria-label="Main navigation">
-  <div class="brand">InitStack Guard</div>
-  {% for section, items in nav %}
-  <div class="nav-section">{{ section }}</div>
-  <ul>
-    {% for label, href, built in items %}
-    {% if built %}
-    <li><a href="{{ href }}"{% if href == current %} aria-current="page"{% endif %}>{{ label }}</a></li>
-    {% else %}
-    <li><span class="disabled" title="Not built yet">{{ label }}</span></li>
-    {% endif %}
-    {% endfor %}
-  </ul>
-  {% endfor %}
-</aside>
-<div class="main">
-  <header class="topbar">
-    <span class="who">{{ admin.display_name or admin.username }}</span>
-    <form method="post" action="/logout">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button type="submit">Sign out</button>
-    </form>
-  </header>
-  <main class="content">
+{% block content %}
     <h1>Dashboard</h1>
     <p>You are signed in. Traffic monitoring and the other pages are built in later stages, so most of the sidebar is greyed out for now.</p>
-  </main>
-</div>
 {% endblock %}

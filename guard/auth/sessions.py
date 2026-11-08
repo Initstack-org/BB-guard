@@ -106,6 +106,24 @@ def revoke_session(conn: sqlite3.Connection, session_id: int, now_ms: int) -> No
                  (now_ms, session_id))
 
 
+def list_for_admin(conn: sqlite3.Connection, admin_id: int, now_ms: int, *,
+                   idle_s: int = 1800) -> list[sqlite3.Row]:
+    """The admin's usable sessions (not revoked, expired or idle), newest activity first.
+    Rows carry no token and no token hash."""
+    return conn.execute(
+        "SELECT id, auth_method, created_ms, last_seen_ms, expires_ms, ip, user_agent FROM sessions"
+        " WHERE admin_id = ? AND revoked_ms IS NULL AND expires_ms > ? AND last_seen_ms >= ?"
+        " ORDER BY last_seen_ms DESC, id DESC LIMIT 100",
+        (admin_id, now_ms, now_ms - idle_s * 1000)).fetchall()
+
+
+def revoke_own(conn: sqlite3.Connection, admin_id: int, session_id: int, now_ms: int) -> bool:
+    """Revoke one session, but only if it belongs to `admin_id`. False if there was nothing to revoke."""
+    cur = conn.execute("UPDATE sessions SET revoked_ms = ? WHERE id = ? AND admin_id = ?"
+                       " AND revoked_ms IS NULL", (now_ms, session_id, admin_id))
+    return cur.rowcount == 1
+
+
 def revoke_all_for_admin(conn: sqlite3.Connection, admin_id: int, now_ms: int, *,
                          except_id: int | None = None) -> int:
     cur = conn.execute(

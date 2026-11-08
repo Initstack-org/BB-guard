@@ -1,0 +1,81 @@
+{% extends "app_base.html" %}
+{% block title %}Authentication - InitStack Guard{% endblock %}
+{% block content %}
+    <h1>Authentication</h1>
+    {% if message %}<p class="notice" role="status">{{ message }}</p>{% endif %}
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+
+    <section class="panel">
+      <h2>Confirm your password</h2>
+      <p class="muted">Sensitive changes need your password confirmed within the last {{ window_label }}.
+        {% if reauth_recent %}It is confirmed right now.{% else %}It is not confirmed right now.{% endif %}</p>
+      {% if password_enabled %}
+      <form method="post" action="/api/v1/reauth/password">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Confirm</button>
+      </form>
+      {% else %}
+      <p class="muted">Password sign-in is turned off.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel">
+      <h2>Change password</h2>
+      {% if password_enabled %}
+      <p class="muted">At least {{ min_length }} characters. Changing it signs out your other sessions.</p>
+      <form method="post" action="/api/v1/account/password">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Current password <input name="current_password" type="password" autocomplete="current-password" required></label>
+        <label>New password <input name="new_password" type="password" autocomplete="new-password" required minlength="{{ min_length }}"></label>
+        <label>New password again <input name="confirm_password" type="password" autocomplete="new-password" required minlength="{{ min_length }}"></label>
+        <button type="submit">Change password</button>
+      </form>
+      {% else %}
+      <p class="muted">Password sign-in is turned off.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel">
+      <h2>Passkeys</h2>
+      <p class="muted">Passkey registration is not available yet. Until it is, your password is your only way to sign in, so keep it safe. If you are ever locked out, an operator can reset it with <code>guard-admin reset-password</code>.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Your sessions</h2>
+      <p class="muted">Times are shown in {{ timezone_name }}.</p>
+      <div class="scroll">
+        <table class="table">
+          <thead><tr><th>Signed in</th><th>Last active</th><th>Address</th><th>Browser</th><th>Method</th><th></th></tr></thead>
+          <tbody>
+          {% for s in sessions %}
+            <tr>
+              <td>{{ s.created }}</td>
+              <td>{{ s.last_seen }}</td>
+              <td>{{ s.ip }}</td>
+              <td>{{ s.agent }}</td>
+              <td>{{ s.method }}</td>
+              <td>
+                {% if s.current %}
+                <strong>This session</strong>
+                {% else %}
+                <form method="post" action="/api/v1/account/sessions/revoke">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="session_id" value="{{ s.id }}">
+                  <button type="submit" class="secondary">Sign out</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if sessions|length > 1 %}
+      <form method="post" action="/api/v1/account/sessions/revoke-others">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="secondary">Sign out all other sessions</button>
+      </form>
+      {% endif %}
+    </section>
+{% endblock %}
