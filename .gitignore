@@ -26,3 +26,6 @@ venv/
 
 # macOS
 .DS_Store
+
+# Local working notes (UI design reference, not part of the project)
+DESIGN_SKILL.md

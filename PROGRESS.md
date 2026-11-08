@@ -2,7 +2,9 @@
 
 Status of each stage and acceptance item for InitStack Guard. `GOAL.md` defines what "done" means; this file says where things stand. Nothing is marked done without code and tests (GOAL rule 11).
 
-**Last updated:** 2026-11-08 (Dashboard overview added; Visitors and URL History found written but not recorded)
+**UI rule for every session:** before any change to templates, `static/*.css` or anything the person sees in the dashboard, read `DESIGN_SKILL.md` in this folder and follow it. It is local only (listed in `.gitignore`, never committed); if it is missing, ask the owner for it instead of designing from memory.
+
+**Last updated:** 2026-11-08 (Dashboard overview added; Visitors and URL History found written but not recorded; web UI redesigned to `DESIGN_SKILL.md`)
 
 ## Stage status
 
@@ -42,7 +44,7 @@ Greyed out, no route: IP Intelligence, IP Rules, URL Access Rules, Block Page, H
 
 | Item | Area | Design coverage | Code and tests |
 |---|---|---|---|
-| A | Dashboard UI | Route and page list in API.md | **Partial.** Sidebar has the exact GOAL sections; 7 of 15 pages live; dark/light follows the browser setting only. Sidebar is not collapsible; no top-bar search, notifications or breadcrumbs |
+| A | Dashboard UI | Route and page list in API.md | **Partial.** Sidebar has the exact GOAL sections; 7 of 15 pages live; UI restyled to `DESIGN_SKILL.md` (translucent sidebar and top bar, scroll-edge fade, size-specific type, press feedback, reduced-motion, reduced-transparency and high-contrast modes), written, not looked at in a browser by Claude. Sidebar collapses (CSS-only checkbox, state is not remembered) and is a drawer on narrow screens. Dark/light follows the browser, or the admin's `theme` value when it is `light` or `dark`; nothing in the UI sets it yet. No top-bar search, notifications or breadcrumbs |
 | B | Visitor monitoring | SUBSYSTEMS 2, SCHEMA 5.3, API 7.1 | **Partial.** Ingest library records every field GOAL B lists and redacts secrets (unit tests, run). Visitor search, per-address detail (URLs with hit counts, methods, status codes, User-Agent history, forum accounts, date and status filters) and a single-request view are written, not run. Moderation status and IP intel are not there (Stage 5); ingest is not running in a service |
 | C | URL history | SCHEMA 5.3 and 9, API 7.3 | **Partial.** Page, ranking, per-URL detail, graphs and CSV export are written, not run. Graphs are 24h, 7d, 30d and custom dates, labelled with unit and time zone. Busy URLs are graphed from the hourly rollup, others from the request rows |
 | D | IP intelligence and moderation | SUBSYSTEMS 3, SCHEMA 5.4, API 7.2 and 8.1 | Not started (schema only) |
