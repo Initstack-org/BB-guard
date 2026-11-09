@@ -1,6 +1,6 @@
 initstack License, I-ISC (Version 1.0)
 
-Copyright © [YEAR] [COPYRIGHT HOLDER]
+Copyright © 2026 Colin Edwards
 
 This license grants rights only to Individuals and, within the Education
 Exception, Educational Persons, as defined below. No rights are granted
